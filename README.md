@@ -1,3 +1,17 @@
+# Snail Mail Admin (Firebase App Hosting)
+
+This repo hosts the **Snail Mail Admin** Next.js operations console for Firebase App Hosting.
+
+| | |
+| --- | --- |
+| **Deploy from** | `/starters/nextjs/basic` |
+| **Live branch** | `main` |
+| **App README** | [`starters/nextjs/basic/README.md`](starters/nextjs/basic/README.md) |
+
+Forked from [firebase/apphosting-adapters](https://github.com/firebase/apphosting-adapters) so the directory layout matches [Firebase App Hosting get started](https://firebase.google.com/docs/app-hosting/get-started).
+
+---
+
 # App Hosting adapters
 
 ## Overview

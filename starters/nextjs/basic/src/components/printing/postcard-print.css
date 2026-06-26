@@ -1,0 +1,130 @@
+/** 4×6 landscape print sheets. */
+
+@media print {
+  body {
+    background: white !important;
+  }
+
+  @page {
+    /* Standard 4×6 photo/postcard: long edge horizontal */
+    size: 6in 4in;
+    margin: 0.2in;
+  }
+
+  .snailmail-print-pack .sn-only-screen {
+    display: none !important;
+  }
+
+  .snailmail-print-pack .sn-only-print {
+    display: block !important;
+  }
+
+  .sn-print-page {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 3.5in;
+    page-break-after: always;
+    break-after: page;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .sn-print-page--last {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  .sn-print-divider {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+    color: #1a1a1a;
+  }
+
+  .sn-print-divider h2 {
+    font-size: 14pt;
+    margin: 0 0 0.35rem;
+    font-weight: 700;
+  }
+
+  .sn-print-divider .sn-print-divider-meta {
+    font-size: 9pt;
+    color: #444;
+    margin-bottom: 0.5rem;
+  }
+
+  .sn-print-divider address {
+    font-style: normal;
+    font-size: 11pt;
+    line-height: 1.35;
+    margin: 0 0 0.75rem;
+  }
+
+  .sn-print-divider .sn-print-count {
+    font-size: 12pt;
+    font-weight: 600;
+    margin-top: 0.25rem;
+  }
+
+  .sn-print-divider .sn-print-uid {
+    font-size: 7pt;
+    font-family: ui-monospace, monospace;
+    color: #666;
+    margin-top: auto;
+  }
+
+  .sn-print-photo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+  }
+
+  .sn-print-photo-img {
+    max-width: 100%;
+    max-height: 3.4in;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+  }
+
+  .sn-print-caption {
+    font-family: system-ui, sans-serif;
+    color: #1a1a1a;
+    display: flex;
+    flex-direction: column;
+    padding-top: 0.15in;
+  }
+
+  .sn-print-caption .sn-cap-label {
+    font-size: 8pt;
+    color: #555;
+    margin-bottom: 0.35rem;
+  }
+
+  .sn-print-caption .sn-cap-body {
+    font-size: 11pt;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    flex: 1;
+  }
+
+  .sn-print-caption .sn-cap-from {
+    font-size: 9pt;
+    color: #444;
+    margin-top: 0.35rem;
+  }
+
+  .sn-print-caption .sn-cap-status {
+    font-size: 7pt;
+    color: #777;
+    margin-top: 0.25rem;
+    font-family: ui-monospace, monospace;
+  }
+}
+
+/* Screen: never show print-only stack */
+.sn-only-print {
+  display: none;
+}

@@ -1,5 +1,5 @@
-# Settings for Backend (on Cloud Run).
-# See https://firebase.google.com/docs/app-hosting/configure#cloud-run.
+# Firebase App Hosting config for Snail Mail Admin.
+# See https://firebase.google.com/docs/app-hosting/configure
 runConfig:
   minInstances: 0
   # maxInstances: 100
@@ -7,17 +7,13 @@ runConfig:
   # cpu: 1
   # memoryMiB: 512
 
-# Environment variables and secrets.
 env:
-  # Configure environment variables.
-  # See https://firebase.google.com/docs/app-hosting/configure#user-defined-environment.
-  - variable: MESSAGE
-    value: Hello world!
+  - variable: FIREBASE_STORAGE_BUCKET
+    value: snailmail-app.firebasestorage.app
     availability:
-      - BUILD
       - RUNTIME
 
-  # Configure secrets
-  # See https://firebase.google.com/docs/app-hosting/configure#secret-parameters
-  # - variable: API_KEY
-  #   secret: myApiKeySecret
+  # Optional: only needed if the App Hosting runtime service account cannot
+  # access Firestore/Storage. Create the secret in Firebase console first.
+  # - variable: FIREBASE_SERVICE_ACCOUNT_JSON
+  #   secret: firebaseServiceAccountJson

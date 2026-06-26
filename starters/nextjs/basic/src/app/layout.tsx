@@ -1,31 +1,34 @@
 import type { Metadata } from "next";
+import { DM_Sans, JetBrains_Mono } from "next/font/google";
 
 import "./globals.css";
-import { Header } from "./components";
+
+const dmSans = DM_Sans({
+  variable: "--font-sans",
+  subsets: ["latin"],
+});
+
+const jetbrains = JetBrains_Mono({
+  variable: "--font-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
-  title: "Next.js on Firebase App Hosting",
-  description: "",
+  title: "Snail Mail Admin",
+  description: "Operations console for Snail Mail Social",
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
-    <html lang="en" className="dark-theme">
-      <head>
-        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
-        <link
-          href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
-      </head>
-      <body>
-        <div className="dots" />
-        <Header />
-        {children}
-        <div className="bottom-gradient" />
-      </body>
+    <html
+      lang="en"
+      className={`${dmSans.variable} ${jetbrains.variable} h-full antialiased`}
+    >
+      <body className={`min-h-full flex flex-col ${dmSans.className}`}>{children}</body>
     </html>
   );
 }
