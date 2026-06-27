@@ -5,6 +5,7 @@ import {
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 const DEFAULT_LIMIT = 40;
@@ -24,6 +25,9 @@ function userDocToSnailRow(doc: DocumentSnapshot) {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const url = new URL(req.url);
   const limit = Math.min(
     MAX_LIMIT,

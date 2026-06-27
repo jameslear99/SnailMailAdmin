@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiJson } from "@/lib/api-fetch";
+import { apiFetch, apiJson } from "@/lib/api-fetch";
 
 type RecipientRow = {
   recipientUid: string;
@@ -148,7 +148,7 @@ export default function PrintingQueuePage() {
     setRecordBusyUid(recipientUid);
     setError(null);
     try {
-      const res = await fetch("/api/printing/mark-fulfilled", {
+      const res = await apiFetch("/api/printing/mark-fulfilled", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ recipientUid }),
@@ -182,7 +182,7 @@ export default function PrintingQueuePage() {
     setRecordingBulk(true);
     setError(null);
     try {
-      const res = await fetch("/api/printing/mark-fulfilled", {
+      const res = await apiFetch("/api/printing/mark-fulfilled", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ recipientUids: uids }),

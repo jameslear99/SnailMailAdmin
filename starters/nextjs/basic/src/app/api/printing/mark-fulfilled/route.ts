@@ -2,6 +2,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { MAX_DELIVERY_DOCS_SCAN, normalizedRecipientId, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
 import { isInPrintQueue, type DeliveryDocShape } from "@/lib/print-fulfillment";
 
@@ -88,6 +89,9 @@ async function markQueueFulfilledForRecipients(db: Firestore, uids: string[]): P
  * more recipients (same rules as the printing queue — not tied to digital unlock).
  */
 export async function POST(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const raw = (await req.json()) as unknown;
     const parsed = parseBody(raw);

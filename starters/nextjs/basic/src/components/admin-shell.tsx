@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 
 const nav = [
   { href: "/", label: "Dashboard" },
@@ -9,10 +10,18 @@ const nav = [
   { href: "/snails", label: "Snail art" },
   { href: "/printing", label: "Printing" },
   { href: "/ad-management", label: "Ad Management" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, signOut } = useAuth();
+
+  async function handleSignOut() {
+    await signOut();
+    router.replace("/login");
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F6F3EE] text-[#2E2A24]">
@@ -41,9 +50,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               })}
             </nav>
           </div>
-          <p className="text-xs text-amber-900/80 bg-amber-100/80 border border-amber-200/80 rounded-md px-2 py-1">
-            Local dev: authentication disabled
-          </p>
+          <div className="flex items-center gap-3 text-sm">
+            {user?.email ? (
+              <span className="hidden text-[#5C564D] sm:inline">{user.email}</span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="rounded-md border border-[#C8D5B9] px-2 py-1 text-[#5C564D] hover:bg-[#EDF2E6]"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 print:max-w-none print:px-8 print:py-4">{children}</main>

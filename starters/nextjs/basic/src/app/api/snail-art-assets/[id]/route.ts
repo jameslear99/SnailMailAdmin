@@ -2,12 +2,16 @@ import { FieldValue } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminBucket, getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const { id } = await ctx.params;
   try {
     const db = getAdminDb();
@@ -29,6 +33,9 @@ export async function PATCH(
   req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const { id } = await ctx.params;
   try {
     const body = (await req.json()) as {
@@ -79,9 +86,12 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const { id } = await ctx.params;
   try {
     const db = getAdminDb();

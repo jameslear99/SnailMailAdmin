@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { apiFetch } from "@/lib/api-fetch";
+
 type BackfillResult = {
   ok: boolean;
   usersUpdated: number;
@@ -18,7 +20,7 @@ export function FriendCountBackfillButton() {
     setMessage(null);
     setIsError(false);
     try {
-      const res = await fetch("/api/friends/backfill-counts", {
+      const res = await apiFetch("/api/friends/backfill-counts", {
         method: "POST",
       });
       const text = await res.text();

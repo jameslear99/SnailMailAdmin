@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { PostcardPrintSheets, type PrintPackSegment } from "@/components/printing/postcard-print-sheets";
 import type { PrintQueueItem } from "@/lib/print-fulfillment";
 
-import { apiJson } from "@/lib/api-fetch";
+import { apiFetch, apiJson } from "@/lib/api-fetch";
 import { captionFromMailPost, formatIsoShort } from "@/lib/postcard-print-utils";
 import { mailingAddressLinesFromUserDoc } from "@/lib/mailing-address";
 
@@ -84,7 +84,7 @@ export default function PrintPackPage() {
     setMarkBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/printing/mark-fulfilled", {
+      const res = await apiFetch("/api/printing/mark-fulfilled", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ recipientUid: uid }),

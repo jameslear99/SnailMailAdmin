@@ -2,6 +2,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 import {
   compareSnailArtPaintOrder,
@@ -11,6 +12,9 @@ import {
 
 /** List catalog entries for layered snail art (`snailArtAssets`). */
 export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const url = new URL(req.url);
   const category = url.searchParams.get("category")?.trim();
 
@@ -38,6 +42,9 @@ export async function GET(req: Request) {
 
 /** Optional JSON-only create (metadata + pre-existing URL). Rare; prefer POST /api/snail-art-assets/upload */
 export async function POST(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const body = (await req.json()) as {
       category?: string;

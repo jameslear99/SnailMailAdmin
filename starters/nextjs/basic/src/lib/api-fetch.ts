@@ -1,6 +1,20 @@
-/** Plain fetch for local `/api/*` calls. Auth is intentionally disabled for now. */
+import { getFirebaseAuth, isFirebaseConfigured } from "@/lib/firebase/client";
+
+async function authHeaders(): Promise<HeadersInit> {
+  if (!isFirebaseConfigured()) return {};
+  const user = getFirebaseAuth().currentUser;
+  if (!user) return {};
+  return { Authorization: `Bearer ${await user.getIdToken()}` };
+}
+
+/** Authenticated fetch for `/api/*` — attaches the Firebase ID token. */
 export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, init);
+  const headers = new Headers(init.headers);
+  const auth = await authHeaders();
+  for (const [key, value] of Object.entries(auth)) {
+    if (value) headers.set(key, String(value));
+  }
+  return fetch(input, { ...init, headers });
 }
 
 export async function apiJson<T>(input: string, init: RequestInit = {}): Promise<T> {

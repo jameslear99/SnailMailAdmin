@@ -7,9 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "set-admin-claim": "node scripts/set-admin-claim.cjs"
+    "set-admin-claim": "node scripts/set-admin-claim.cjs",
+    "create-admin-user": "node scripts/create-admin-user.cjs"
   },
   "dependencies": {
+    "firebase": "^11.10.0",
     "firebase-admin": "^13.10.0",
     "image-size": "^2.0.2",
     "next": "16.2.6",

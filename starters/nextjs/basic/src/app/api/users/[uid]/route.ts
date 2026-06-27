@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export async function GET(
   req: Request,
   ctx: { params: Promise<{ uid: string }> },
 ) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   const { uid } = await ctx.params;
 
   try {
