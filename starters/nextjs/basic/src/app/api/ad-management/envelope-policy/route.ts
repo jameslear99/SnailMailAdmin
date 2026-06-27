@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { type EnvelopeAdPolicy, type EnvelopeAdTier, parseEnvelopeAdPolicy } from "@/lib/envelope-ad-policy";
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 const DOC_PATH = "adminSettings/envelopeAdPolicy" as const;
@@ -23,7 +24,10 @@ function validatePolicy(body: EnvelopeAdPolicy): string | null {
   return null;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const db = getAdminDb();
     const { collection, id } = collectionAndDoc();
@@ -40,6 +44,9 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const json = (await req.json()) as Partial<EnvelopeAdPolicy> & { tiers?: EnvelopeAdTier[] };
     const policy = parseEnvelopeAdPolicy({

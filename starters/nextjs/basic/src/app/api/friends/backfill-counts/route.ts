@@ -2,6 +2,7 @@ import { FieldValue, type DocumentData } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 
 const BATCH_LIMIT = 400;
 
@@ -24,7 +25,10 @@ function friendshipCountsTowardUser(data: DocumentData, uid: string): boolean {
  * Recompute `publicProfiles/{uid}.friendsCount` for every user that appears in
  * any `friendships` document. Idempotent — safe to run repeatedly.
  */
-export async function POST() {
+export async function POST(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const db = getAdminDb();
     const snap = await db.collection("friendships").get();

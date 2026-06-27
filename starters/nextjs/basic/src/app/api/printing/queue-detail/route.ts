@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildQueueDetailPayload } from "@/lib/build-print-queue-detail";
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { MAX_DELIVERY_DOCS_SCAN, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
 
 /**
@@ -14,6 +15,9 @@ import { MAX_DELIVERY_DOCS_SCAN, scanAllDeliveryDocs } from "@/lib/printing-deli
  * `recipientUserId` collection-group index — avoids Firestore 9 FAILED_PRECONDITION.
  */
 export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const url = new URL(req.url);
     const recipientUid = url.searchParams.get("recipientUid")?.trim();

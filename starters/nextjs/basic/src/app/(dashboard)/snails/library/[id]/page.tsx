@@ -93,7 +93,7 @@ export default function SnailArtAssetEditorPage() {
       fd.set("assetId", id);
       fd.set("category", String(doc?.category ?? "shell"));
       fd.set("displayName", displayName.trim());
-      const res = await fetch("/api/snail-art-assets/upload", { method: "POST", body: fd });
+      const res = await apiFetch("/api/snail-art-assets/upload", { method: "POST", body: fd });
       const text = await res.text();
       if (!res.ok) {
         let msg = text;

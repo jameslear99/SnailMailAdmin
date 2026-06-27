@@ -5,6 +5,7 @@ import {
 import { NextResponse } from "next/server";
 
 import { getAdminBucket, getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import {
   firebaseStorageDownloadUrl,
   newFirebaseStorageDownloadToken,
@@ -26,6 +27,9 @@ const MIME: Record<string, string> = {
 
 /** Multipart upload: create or replace file + metadata in `snailArtAssets` + Storage `snail-art-assets/{category}/{slug}.ext` */
 export async function POST(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const formData = await req.formData();
     const file = formData.get("file");

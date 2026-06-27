@@ -9,7 +9,7 @@ import { PostcardPrintSheets, type PrintPackSegment } from "@/components/printin
 import type { QueueDetailPayload } from "@/lib/build-print-queue-detail";
 import type { PrintQueueItem } from "@/lib/print-fulfillment";
 
-import { apiJson } from "@/lib/api-fetch";
+import { apiFetch, apiJson } from "@/lib/api-fetch";
 import { captionFromMailPost, formatIsoShort } from "@/lib/postcard-print-utils";
 import { mailingAddressLinesFromUserDoc } from "@/lib/mailing-address";
 
@@ -201,7 +201,7 @@ export function BulkPackClient() {
     setMarkBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/printing/mark-fulfilled", {
+      const res = await apiFetch("/api/printing/mark-fulfilled", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ recipientUids: uids }),

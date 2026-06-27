@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildQueueDetailPayload, type QueueDetailPayload } from "@/lib/build-print-queue-detail";
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { MAX_DELIVERY_DOCS_SCAN, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
 
 function parseRecipientUids(raw: string | null): string[] {
@@ -22,6 +23,9 @@ function parseRecipientUids(raw: string | null): string[] {
  * One delivery-group scan + shared mailPost cache.
  */
 export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const url = new URL(req.url);
     const uids = parseRecipientUids(url.searchParams.get("recipientUids"));

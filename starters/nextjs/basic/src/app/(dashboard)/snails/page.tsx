@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiJson } from "@/lib/api-fetch";
+import { apiFetch, apiJson } from "@/lib/api-fetch";
 import { displayNameFromFilenameStem, normalizeSnailArtSlug, suggestedSlugFromStem } from "@/lib/snail-art-slug";
 import {
   compareSnailArtPaintOrder,
@@ -291,7 +291,7 @@ export default function SnailArtCatalogPage() {
     fd.set("displayName", displayName.trim());
     fd.set("slug", slug);
 
-    const res = await fetch("/api/snail-art-assets/upload", {
+    const res = await apiFetch("/api/snail-art-assets/upload", {
       method: "POST",
       body: fd,
     });

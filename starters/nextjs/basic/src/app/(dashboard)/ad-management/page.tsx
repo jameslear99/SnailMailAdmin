@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiJson } from "@/lib/api-fetch";
+import { apiFetch, apiJson } from "@/lib/api-fetch";
 import {
   adPagesForPostCount,
   type EnvelopeAdPolicy,
@@ -55,7 +55,7 @@ export default function AdManagementPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await fetch("/api/ad-management/envelope-policy", {
+      const res = await apiFetch("/api/ad-management/envelope-policy", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(policy),

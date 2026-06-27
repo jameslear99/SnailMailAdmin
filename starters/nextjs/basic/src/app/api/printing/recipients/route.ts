@@ -2,6 +2,7 @@ import { type QueryDocumentSnapshot } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
+import { requireAdminApi } from "@/lib/require-admin-api";
 import { MAX_DELIVERY_DOCS_SCAN } from "@/lib/printing-delivery-scan";
 import {
   consumeDeliveryIntoRollup,
@@ -25,7 +26,10 @@ function readDelivery(doc: QueryDocumentSnapshot): DeliveryDocShape {
  * Recipient-centric printing dashboard: merge all `deliveries` with `users`
  * (cap 500 users) for queue / received / ad-slot counts.
  */
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireAdminApi(req);
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const db = getAdminDb();
 
