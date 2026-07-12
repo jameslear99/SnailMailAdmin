@@ -18,16 +18,7 @@ type FirebaseWebConfig = {
 };
 
 function readFirebaseWebConfig(): FirebaseWebConfig {
-  const injected = process.env.FIREBASE_WEBAPP_CONFIG?.trim();
-  if (injected) {
-    try {
-      return JSON.parse(injected) as FirebaseWebConfig;
-    } catch {
-      // Fall through to NEXT_PUBLIC_* when JSON is malformed.
-    }
-  }
-
-  return {
+  const fromPublic: FirebaseWebConfig = {
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
     authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
     projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
@@ -35,6 +26,23 @@ function readFirebaseWebConfig(): FirebaseWebConfig {
     messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
     appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
   };
+
+  // Prefer explicit NEXT_PUBLIC_* — App Hosting may inject FIREBASE_WEBAPP_CONFIG
+  // from a different linked web app (e.g. another Firebase project in the same GCP org).
+  if (fromPublic.apiKey && fromPublic.projectId && fromPublic.appId) {
+    return fromPublic;
+  }
+
+  const injected = process.env.FIREBASE_WEBAPP_CONFIG?.trim();
+  if (injected) {
+    try {
+      return JSON.parse(injected) as FirebaseWebConfig;
+    } catch {
+      // Fall through when JSON is malformed.
+    }
+  }
+
+  return fromPublic;
 }
 
 const firebaseConfig = readFirebaseWebConfig();
