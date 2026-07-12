@@ -12,6 +12,24 @@ import {
   SNAIL_ART_PAINT_ORDER_TOP_TO_BOTTOM,
   type SnailArtCategory,
 } from "@/lib/snail-art-types";
+import {
+  downloadBlob,
+  renderSnailPreview,
+  renderSnailPreviewPng,
+  snailPreviewDownloadFilename,
+} from "@/lib/render-snail-preview-png";
+import {
+  DEFAULT_PREVIEW_COLORS,
+  layerAcceptsPreviewTint,
+  previewColorLabel,
+  randomPreviewSlotColors,
+  tintsForLayersFromColors,
+  type PreviewSlotColors,
+} from "@/lib/snail-preview-tint";
+import {
+  DEFAULT_SNAIL_ART_RECOLOR_POLICY,
+  type SnailArtRecolorPolicy,
+} from "@/lib/snail-art-recolor-policy";
 import { snailArtRequirementSummary } from "@/lib/snail-art-upload-spec";
 import { validateSnailArtFileForUpload } from "@/lib/validate-snail-art-file-client";
 
@@ -47,26 +65,7 @@ function pickRandom<T>(items: T[]): T | null {
   return items[Math.floor(Math.random() * items.length)]!;
 }
 
-/** Slots that accept player/admin color variants in-app (not face or accessories). */
-const SNAIL_PREVIEW_RECOLOR_CATEGORIES = new Set<SnailArtCategory>(["antenna", "body", "shell"]);
-
-/** Approximate in-app tint for quick visual tests (SVG/PNG as <img>). */
-function randomTintFilter(): string {
-  const hue = Math.floor(Math.random() * 360);
-  const sat = 80 + Math.random() * 50;
-  const bright = 0.92 + Math.random() * 0.16;
-  return `brightness(${bright}) saturate(${sat}%) hue-rotate(${hue}deg)`;
-}
-
-function previewTintForLayer(layer: AssetRow): string {
-  const cat = layer.category as SnailArtCategory | undefined;
-  if (cat && SNAIL_PREVIEW_RECOLOR_CATEGORIES.has(cat)) return randomTintFilter();
-  return "none";
-}
-
-function previewTintsForLayers(layers: AssetRow[]): string[] {
-  return layers.map(previewTintForLayer);
-}
+const PREVIEW_CANVAS_PX = 200;
 
 function groupByCategory(assetList: AssetRow[]): Map<SnailArtCategory, AssetRow[]> {
   const m = new Map<SnailArtCategory, AssetRow[]>();
@@ -126,7 +125,54 @@ export default function SnailArtCatalogPage() {
   const [dragActive, setDragActive] = useState(false);
 
   const [previewLayers, setPreviewLayers] = useState<AssetRow[]>([]);
-  const [previewTints, setPreviewTints] = useState<string[]>([]);
+  const [previewColors, setPreviewColors] = useState<PreviewSlotColors>(DEFAULT_PREVIEW_COLORS);
+  const [recolorPolicy, setRecolorPolicy] = useState<SnailArtRecolorPolicy>(DEFAULT_SNAIL_ART_RECOLOR_POLICY);
+  const [recolorPolicyBusy, setRecolorPolicyBusy] = useState(false);
+  const [recolorPolicyError, setRecolorPolicyError] = useState<string | null>(null);
+  const [previewRendering, setPreviewRendering] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const previewTints = useMemo(
+    () => tintsForLayersFromColors(previewLayers, previewColors, recolorPolicy),
+    [previewLayers, previewColors, recolorPolicy],
+  );
+
+  const loadRecolorPolicy = useCallback(async (): Promise<SnailArtRecolorPolicy> => {
+    try {
+      const data = await apiJson<{ policy: SnailArtRecolorPolicy }>("/api/snail-art/recolor-policy");
+      setRecolorPolicy(data.policy);
+      setRecolorPolicyError(null);
+      return data.policy;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to load recolor policy";
+      setRecolorPolicyError(message);
+      return DEFAULT_SNAIL_ART_RECOLOR_POLICY;
+    }
+  }, []);
+
+  async function saveRecolorPolicy(next: SnailArtRecolorPolicy) {
+    setRecolorPolicyBusy(true);
+    setRecolorPolicyError(null);
+    try {
+      const data = await apiJson<{ policy: SnailArtRecolorPolicy }>("/api/snail-art/recolor-policy", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy: next }),
+      });
+      setRecolorPolicy(data.policy);
+    } catch (e) {
+      setRecolorPolicyError(e instanceof Error ? e.message : "Failed to save recolor policy");
+    } finally {
+      setRecolorPolicyBusy(false);
+    }
+  }
+
+  function toggleRecolorCategory(category: SnailArtCategory, enabled: boolean) {
+    if (category === "face") return;
+    const next = { ...recolorPolicy, [category]: enabled };
+    void saveRecolorPolicy(next);
+  }
 
   const load = useCallback(async (): Promise<AssetRow[]> => {
     setBusy(true);
@@ -147,31 +193,68 @@ export default function SnailArtCatalogPage() {
     let cancelled = false;
     const t = window.setTimeout(() => {
       void (async () => {
+        await loadRecolorPolicy();
         const list = await load();
         if (cancelled || list.length === 0) return;
         const picked = randomLayersFromAssets(list);
         setPreviewLayers(picked);
-        setPreviewTints(previewTintsForLayers(picked));
+        setPreviewColors(randomPreviewSlotColors());
       })();
     }, 0);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [load]);
+  }, [load, loadRecolorPolicy]);
+
+  useEffect(() => {
+    if (previewLayers.length === 0) return;
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+
+    let cancelled = false;
+    setPreviewRendering(true);
+    void renderSnailPreview(canvas, previewLayers, previewTints, PREVIEW_CANVAS_PX)
+      .catch((e) => {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to render preview");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewRendering(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewLayers, previewTints]);
 
   const byCategory = useMemo(() => groupByCategory(assets), [assets]);
 
   function regenerateRandomSnail() {
     const picked = randomLayersFromAssets(assets);
     setPreviewLayers(picked);
-    setPreviewTints(previewTintsForLayers(picked));
+    setPreviewColors(randomPreviewSlotColors());
   }
 
   function applyRandomPreviewForList(assetList: AssetRow[]) {
     const picked = randomLayersFromAssets(assetList);
     setPreviewLayers(picked);
-    setPreviewTints(previewTintsForLayers(picked));
+    setPreviewColors(randomPreviewSlotColors());
+  }
+
+  async function downloadPreviewPng() {
+    if (previewLayers.length === 0) return;
+    setDownloadBusy(true);
+    setError(null);
+    try {
+      const blob = await renderSnailPreviewPng(previewLayers, previewTints);
+      downloadBlob(blob, snailPreviewDownloadFilename(previewLayers));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to download preview");
+    } finally {
+      setDownloadBusy(false);
+    }
   }
 
   function resetAndOpenUpload() {
@@ -401,6 +484,49 @@ export default function SnailArtCatalogPage() {
       </div>
 
       <section className="rounded-xl border border-[#C8D5B9]/60 bg-[#FDFBF7] p-5">
+        <h2 className="text-sm font-semibold text-[#2E2A24]">Recolor policy</h2>
+        <p className="mt-2 max-w-2xl text-xs text-[#5C564D]">
+          Choose which component classes can receive player tint colors when snails are generated in the app.
+          This applies together with each asset&apos;s own <strong>Recolorable</strong> flag — both must allow
+          tinting. New uploads default their recolorable flag from these toggles. Faces are never tinted.
+        </p>
+        {recolorPolicyError ? (
+          <p className="mt-2 text-xs text-red-700">{recolorPolicyError}</p>
+        ) : null}
+        <ul className="mt-4 flex flex-wrap gap-3">
+          {SNAIL_ART_CATEGORIES.map((category) => {
+            const label = categoryLabel(category);
+            const lockedOff = category === "face";
+            const checked = lockedOff ? false : recolorPolicy[category];
+            return (
+              <li key={category}>
+                <label
+                  className={`flex items-center gap-2 rounded-lg border border-[#C8D5B9]/80 bg-white px-3 py-2 text-sm ${
+                    lockedOff ? "opacity-60" : "cursor-pointer hover:bg-[#F0F5EA]"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={recolorPolicyBusy || lockedOff}
+                    onChange={(e) => toggleRecolorCategory(category, e.target.checked)}
+                    className="rounded border-[#C8D5B9]"
+                  />
+                  <span className="text-[#2E2A24]">{label}</span>
+                  {lockedOff ? (
+                    <span className="text-[10px] text-[#5C564D]">always off</span>
+                  ) : null}
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        {recolorPolicyBusy ? (
+          <p className="mt-2 text-xs text-[#5C564D]">Saving recolor policy…</p>
+        ) : null}
+      </section>
+
+      <section className="rounded-xl border border-[#C8D5B9]/60 bg-[#FDFBF7] p-5">
         <h2 className="text-sm font-semibold text-[#2E2A24]">Layer slots &amp; stack order</h2>
         <p className="mt-2 text-xs text-[#5C564D]">
           Paint order top → bottom:{" "}
@@ -421,8 +547,11 @@ export default function SnailArtCatalogPage() {
             <h2 className="font-medium text-[#2E2A24]">Random snail preview</h2>
             <p className="mt-1 max-w-xl text-xs text-[#5C564D]">
               Picks one random asset per required slot (when that slot has items), skips accessories about 30% of the
-              time, stacks in catalog paint order, and tints only body, shell, and antenna (face and accessories keep
-              their art colors). This is only a rough browser preview—not identical to Flutter.
+              time, and stacks in catalog paint order. Body, shell, and antenna use the same{" "}
+              <strong>modulate</strong> tint as the Flutter app; faces and accessories keep their source colors. For
+              natural recoloring, publish those slots as neutral/grayscale art — pre-colored PNGs (e.g. a purple body)
+              cannot shift cleanly to browns or reds. Use the color pickers below to test palette choices, or{" "}
+              <strong>Download PNG</strong> at full 1500×1500.
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -436,11 +565,19 @@ export default function SnailArtCatalogPage() {
             </button>
             <button
               type="button"
-              disabled={busy || previewLayers.length === 0}
-              onClick={() => setPreviewTints(previewTintsForLayers(previewLayers))}
+              disabled={busy || downloadBusy || previewLayers.length === 0}
+              onClick={() => void downloadPreviewPng()}
+              className="rounded-lg border border-[#C8D5B9] bg-white px-3 py-2 text-sm font-medium text-[#4F6E43] hover:bg-[#F0F5EA] disabled:opacity-50"
+            >
+              {downloadBusy ? "Exporting…" : "Download PNG"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || previewRendering || previewLayers.length === 0}
+              onClick={() => setPreviewColors(randomPreviewSlotColors())}
               className="rounded-lg border border-[#C8D5B9] bg-white px-3 py-2 text-sm text-[#4F6E43] hover:bg-[#F0F5EA] disabled:opacity-50"
             >
-              Recolor body / shell / antenna
+              Random colors
             </button>
           </div>
         </div>
@@ -452,34 +589,78 @@ export default function SnailArtCatalogPage() {
               </div>
             ) : (
               <div className="absolute inset-3 flex items-center justify-center">
-                {previewLayers.map((layer, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={`${layer.id}-${i}`}
-                    src={layer.storageUrl}
-                    alt=""
-                    className="pointer-events-none absolute max-h-[95%] max-w-[95%] object-contain"
-                    style={{ filter: previewTints[i] ?? "none", zIndex: i + 1 }}
-                  />
-                ))}
+                <canvas
+                  ref={previewCanvasRef}
+                  width={PREVIEW_CANVAS_PX}
+                  height={PREVIEW_CANVAS_PX}
+                  className="max-h-full max-w-full object-contain"
+                  aria-label="Random snail preview"
+                />
+                {previewRendering ? (
+                  <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-white/80 px-1.5 py-0.5 text-[10px] text-[#5C564D]">
+                    Rendering…
+                  </span>
+                ) : null}
               </div>
             )}
           </div>
-          <ul className="min-w-0 flex-1 space-y-1 text-xs text-[#5C564D]">
+          <ul className="min-w-0 flex-1 space-y-3 text-xs text-[#5C564D]">
             {previewLayers.length === 0 ? null : (
               <>
+                <li>
+                  <p className="font-medium text-[#2E2A24]">Tint colors</p>
+                  <div className="mt-2 flex flex-wrap gap-3">
+                    {(Object.keys(previewColors) as Array<keyof PreviewSlotColors>)
+                      .filter((slot) => recolorPolicy[slot])
+                      .map((slot) => (
+                      <label key={slot} className="flex items-center gap-2">
+                        <span className="w-14 capitalize text-[#2E2A24]">{previewColorLabel(slot)}</span>
+                        <input
+                          type="color"
+                          value={previewColors[slot]}
+                          onChange={(e) =>
+                            setPreviewColors((prev) => ({
+                              ...prev,
+                              [slot]: e.target.value,
+                            }))
+                          }
+                          className="h-8 w-10 cursor-pointer rounded border border-[#C8D5B9] bg-white p-0.5"
+                        />
+                        <code className="rounded bg-[#E4ECD9] px-1 py-0.5 text-[10px]">{previewColors[slot]}</code>
+                      </label>
+                    ))}
+                  </div>
+                  {!recolorPolicy.body && !recolorPolicy.shell && !recolorPolicy.antenna ? (
+                    <p className="mt-2 text-[10px] text-[#5C564D]">
+                      Enable body, shell, or antenna in recolor policy to preview tint colors.
+                    </p>
+                  ) : null}
+                </li>
                 <li className="font-medium text-[#2E2A24]">This mix</li>
-                {previewLayers.map((layer) => (
-                  <li key={layer.id} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                    <span className="rounded bg-[#E4ECD9] px-1.5 py-0.5 font-medium uppercase text-[#2E3D28]">
-                      {layer.category}
-                    </span>
-                    <span>{layer.displayName ?? layer.slug}</span>
-                    <Link href={`/snails/library/${encodeURIComponent(layer.id)}`} className="text-[#4F6E43] hover:underline">
-                      edit
-                    </Link>
-                  </li>
-                ))}
+                {previewLayers.map((layer, index) => {
+                  const tint = previewTints[index];
+                  const tinted = layerAcceptsPreviewTint(layer, recolorPolicy);
+                  return (
+                    <li key={layer.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="rounded bg-[#E4ECD9] px-1.5 py-0.5 font-medium uppercase text-[#2E3D28]">
+                        {layer.category}
+                      </span>
+                      <span>{layer.displayName ?? layer.slug}</span>
+                      {tinted && tint ? (
+                        <span
+                          className="inline-block h-3 w-3 rounded-full border border-[#C8D5B9]"
+                          style={{ backgroundColor: tint }}
+                          title={`Tint ${tint}`}
+                        />
+                      ) : (
+                        <span className="text-[10px] text-[#5C564D]">source colors</span>
+                      )}
+                      <Link href={`/snails/library/${encodeURIComponent(layer.id)}`} className="text-[#4F6E43] hover:underline">
+                        edit
+                      </Link>
+                    </li>
+                  );
+                })}
               </>
             )}
           </ul>
@@ -604,8 +785,8 @@ export default function SnailArtCatalogPage() {
             </div>
 
             <p className="mt-2 rounded-lg border border-amber-200/80 bg-amber-50/80 px-3 py-2 text-xs text-[#5C4A28]">
-              <strong className="text-[#2E2A24]">Requirements:</strong> {snailArtRequirementSummary()} All catalog
-              pieces are recolorable in the app.
+              <strong className="text-[#2E2A24]">Requirements:</strong> {snailArtRequirementSummary()} Whether a piece
+              is recolorable in the app depends on the recolor policy above and the per-asset flag.
             </p>
 
             {error && uploadOpen ? (
