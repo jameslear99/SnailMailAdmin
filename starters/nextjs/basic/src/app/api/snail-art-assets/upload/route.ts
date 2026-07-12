@@ -17,6 +17,10 @@ import {
   type SnailArtCategory,
 } from "@/lib/snail-art-types";
 import { normalizeSnailArtSlug } from "@/lib/snail-art-slug";
+import {
+  categoryAllowsRecolor,
+  parseSnailArtRecolorPolicy,
+} from "@/lib/snail-art-recolor-policy";
 import { isSnailArtAllowedExt, SNAIL_ART_ALLOWED_EXT } from "@/lib/snail-art-upload-spec";
 import { validateSnailArtBuffer } from "@/lib/validate-snail-art-buffer";
 
@@ -133,6 +137,10 @@ export async function POST(req: Request) {
     });
     const storageUrl = firebaseStorageDownloadUrl(bucket.name, storagePath, downloadToken);
 
+    const policySnap = await db.collection("adminSettings").doc("snailArtRecolorPolicy").get();
+    const recolorPolicy = parseSnailArtRecolorPolicy(serializeDoc(policySnap.data() ?? undefined));
+    const recolorable = categoryAllowsRecolor(recolorPolicy, category);
+
     const dimensionFields = {
       widthPx: dimensionCheck.width,
       heightPx: dimensionCheck.height,
@@ -143,7 +151,7 @@ export async function POST(req: Request) {
         {
           storageUrl,
           fileFormat,
-          recolorable: true,
+          recolorable,
           status: "published",
           ...dimensionFields,
           updatedAt: FieldValue.serverTimestamp(),
@@ -160,7 +168,7 @@ export async function POST(req: Request) {
         storageUrl,
         stackOrder,
         fileFormat,
-        recolorable: true,
+        recolorable,
         status: "published",
         ...dimensionFields,
         createdAt: FieldValue.serverTimestamp(),
