@@ -17,3 +17,15 @@ export function formatIsoShort(iso: string | undefined) {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
 }
+
+/** Human-readable date for printed “Sent on” labels. */
+export function formatSentOnDate(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}

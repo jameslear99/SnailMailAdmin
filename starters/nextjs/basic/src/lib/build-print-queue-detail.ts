@@ -85,3 +85,44 @@ export async function buildQueueDetailPayload(
     count: items.length,
   };
 }
+
+/** Build queue items for explicit delivery ids (e.g. resubmitting a prior print job). */
+export async function buildItemsFromDeliveryIds(
+  db: Firestore,
+  deliveryIds: string[],
+  allDeliveryDocs: QueryDocumentSnapshot[],
+  postCache: Map<string, Record<string, unknown> | null>,
+): Promise<PrintQueueItem[]> {
+  const wanted = new Set(deliveryIds.filter((id) => typeof id === "string" && id.trim()));
+  if (wanted.size === 0) return [];
+
+  const items: PrintQueueItem[] = [];
+  for (const doc of allDeliveryDocs) {
+    if (!wanted.has(doc.id)) continue;
+
+    const d = doc.data() as DeliveryDocShape;
+    const mailPostId = typeof d.mailPostId === "string" ? d.mailPostId : "";
+    if (!mailPostId) continue;
+
+    let mailPost = postCache.get(mailPostId);
+    if (mailPost === undefined) {
+      const ps = await db.collection("mailPosts").doc(mailPostId).get();
+      mailPost = ps.exists ? serializeDoc(ps.data())! : null;
+      postCache.set(mailPostId, mailPost);
+    }
+
+    const ser = serializeDoc(doc.data())!;
+    items.push({
+      deliveryId: doc.id,
+      mailPostId,
+      deliveryStatus: typeof ser.deliveryStatus === "string" ? ser.deliveryStatus : undefined,
+      digitalUnlockAt: typeof ser.digitalUnlockAt === "string" ? ser.digitalUnlockAt : undefined,
+      createdAt: typeof ser.createdAt === "string" ? ser.createdAt : undefined,
+      isDigitallyUnlocked: ser.isDigitallyUnlocked === true,
+      mailPost,
+    });
+  }
+
+  items.sort((a, b) => sortKeyForItem(a) - sortKeyForItem(b));
+  return items;
+}
