@@ -1,12 +1,14 @@
 /**
  * HTML for Lob US-letter jobs.
  *
- * Page 1: recipient snail above thank-you copy, two posts at the bottom.
- * Page 2+: four posts per page in a 2×2 grid.
+ * Single-sided: page 1 = intro + two posts; page 2+ = 4-up grid.
+ * Double-sided: page 1 = intro (address window); page 2 = two cover posts (sheet 1 back);
+ * page 3+ = 4-up grids on subsequent sheets.
  */
 
 import type { EnrichedPrintQueueItem } from "@/lib/enrich-lob-letter-items";
 import { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
+import { HERO_SNAIL_PX } from "@/lib/snail-preview-cache";
 import { formatSentOnDate } from "@/lib/postcard-print-utils";
 
 /** Posts on the cover page (bottom row only). */
@@ -149,6 +151,16 @@ type LetterPage =
       ];
     }
   | {
+      kind: "cover-front";
+    }
+  | {
+      kind: "cover-back";
+      slots: [
+        EnrichedPrintQueueItem | undefined,
+        EnrichedPrintQueueItem | undefined,
+      ];
+    }
+  | {
       kind: "grid";
       slots: [
         EnrichedPrintQueueItem | undefined,
@@ -158,29 +170,52 @@ type LetterPage =
       ];
     };
 
-export function paginatePostcardsForLetter(items: EnrichedPrintQueueItem[]): LetterPage[] {
+export function paginatePostcardsForLetter(
+  items: EnrichedPrintQueueItem[],
+  doubleSided = false,
+): LetterPage[] {
   const pages: LetterPage[] = [];
   if (items.length === 0) return pages;
 
-  pages.push({
-    kind: "cover",
-    slots: [items[0], items[1]],
-  });
+  if (doubleSided) {
+    pages.push({ kind: "cover-front" });
+    pages.push({
+      kind: "cover-back",
+      slots: [items[0], items[1]],
+    });
+  } else {
+    pages.push({
+      kind: "cover",
+      slots: [items[0], items[1]],
+    });
+  }
 
   for (let i = POSTCARDS_COVER_PAGE; i < items.length; i += POSTCARDS_PER_CONTENT_PAGE) {
-    pages.push({
-      kind: "grid",
-      slots: [items[i], items[i + 1], items[i + 2], items[i + 3]],
-    });
+    const slots: [
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+    ] = [items[i], items[i + 1], items[i + 2], items[i + 3]];
+    if (slots.every((slot) => !slot)) continue;
+    pages.push({ kind: "grid", slots });
   }
 
   return pages;
 }
 
+/** HTML sheet count for a letter batch (used for Lob print options). */
+export function lobLetterSheetCount(
+  items: EnrichedPrintQueueItem[],
+  doubleSided = false,
+): number {
+  return paginatePostcardsForLetter(items.slice(0, POSTCARDS_PER_LOB_LETTER_MAX), doubleSided).length;
+}
+
 function renderCoverIntro(recipientSnailImageUrl: string | undefined, thankYouMessage: string): string {
   const snailBlock = recipientSnailImageUrl?.trim()
     ? `<div class="cover-intro-snail-wrap">
-        <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" />
+        <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" width="${HERO_SNAIL_PX}" height="${HERO_SNAIL_PX}" />
       </div>`
     : "";
 
@@ -198,6 +233,28 @@ type RenderPageOptions = {
 };
 
 function renderPage(page: LetterPage, pageOpts: RenderPageOptions): string {
+  if (page.kind === "cover-front") {
+    return `
+      <div class="sheet sheet--cover sheet--cover-front">
+        ${renderCoverIntro(pageOpts.recipientSnailImageUrl, pageOpts.thankYouMessage)}
+      </div>
+    `;
+  }
+
+  if (page.kind === "cover-back") {
+    const [left, right] = page.slots;
+    return `
+      <div class="sheet sheet--cover sheet--cover-back">
+        <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            ${renderPostCell(left)}
+            ${renderPostCell(right)}
+          </tr>
+        </table>
+      </div>
+    `;
+  }
+
   if (page.kind === "cover") {
     const [left, right] = page.slots;
     return `
@@ -245,8 +302,9 @@ export function buildLobLetterHtml(
   const opts: BuildLobLetterHtmlOptions =
     typeof options === "string" ? { recipientName: options } : (options ?? {});
   const thankYouMessage = opts.thankYouMessage?.trim() || DEFAULT_LOB_THANK_YOU_MESSAGE;
+  const doubleSided = opts.doubleSided ?? false;
   const packed = items.slice(0, POSTCARDS_PER_LOB_LETTER_MAX);
-  const pages = paginatePostcardsForLetter(packed);
+  const pages = paginatePostcardsForLetter(packed, doubleSided);
   const body = pages
     .map((p) =>
       renderPage(p, {
@@ -277,7 +335,14 @@ export function buildLobLetterHtml(
     .sheet + .sheet { page-break-before: always; }
     .sheet--cover {
       padding-top: 2.65in;
-      min-height: 10.2in;
+    }
+    .sheet--cover-front {
+      min-height: 10in;
+      page-break-after: always;
+    }
+    .sheet--cover-back .quad-cell,
+    .sheet--cover-back .quad-layout {
+      height: 5in;
     }
     .cover-intro {
       width: 100%;
@@ -299,9 +364,10 @@ export function buildLobLetterHtml(
     }
     .cover-snail {
       height: 2.2in;
-      width: auto;
+      width: 2.2in;
       max-width: 2.8in;
       display: inline-block;
+      object-fit: contain;
     }
     .quad-table {
       width: 100%;
@@ -414,11 +480,11 @@ export function buildLobLetterHtml(
       margin: 0 auto;
     }
     .sheet--grid .quad-cell,
-    .sheet--cover .quad-cell {
+    .sheet--cover:not(.sheet--cover-front):not(.sheet--cover-back) .quad-cell {
       height: 4.75in;
     }
     .sheet--grid .quad-layout,
-    .sheet--cover .quad-layout {
+    .sheet--cover:not(.sheet--cover-front):not(.sheet--cover-back) .quad-layout {
       height: 4.75in;
     }
   </style>

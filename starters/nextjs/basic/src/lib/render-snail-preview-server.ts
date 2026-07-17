@@ -1,7 +1,5 @@
 import "server-only";
 
-import { createHash } from "crypto";
-
 import sharp from "sharp";
 
 import type { Firestore } from "firebase-admin/firestore";
@@ -11,6 +9,7 @@ import {
   firebaseStorageDownloadUrl,
   newFirebaseStorageDownloadToken,
 } from "@/lib/firebase-storage-url";
+import { loadProfileForSnailPreview } from "@/lib/load-snail-profile-for-preview";
 import {
   parseSnailLookFromProfile,
   snailLookFingerprint,
@@ -25,6 +24,9 @@ import {
 } from "@/lib/snail-preview-tint";
 import {
   findCachedSnailPreviewUrl,
+  cachedSnailPreviewMeetsSize,
+  HERO_SNAIL_PX,
+  snailPreviewObjectPath,
   type SnailPreviewSize,
 } from "@/lib/snail-preview-cache";
 import { serializeDoc } from "@/lib/serialize-firestore";
@@ -33,7 +35,7 @@ export type { SnailPreviewSize } from "@/lib/snail-preview-cache";
 
 const OUTPUT_PX: Record<SnailPreviewSize, number> = {
   badge: 256,
-  hero: 420,
+  hero: HERO_SNAIL_PX,
 };
 
 function applyModulateTintToRgba(data: Uint8Array, tintHex: string): void {
@@ -81,27 +83,7 @@ async function loadProfileForUid(
   db: Firestore,
   uid: string,
 ): Promise<Record<string, unknown> | null> {
-  const [pubSnap, userSnap] = await Promise.all([
-    db.collection("publicProfiles").doc(uid).get(),
-    db.collection("users").doc(uid).get(),
-  ]);
-
-  const pubData = pubSnap.exists ? serializeDoc(pubSnap.data())! : null;
-  const userData = userSnap.exists ? serializeDoc(userSnap.data())! : null;
-
-  if (pubData && parseSnailLookFromProfile(pubData)) {
-    return pubData;
-  }
-
-  if (userData?.snail && typeof userData.snail === "object") {
-    return {
-      ...(pubData ?? {}),
-      uid,
-      snail: userData.snail,
-    };
-  }
-
-  return pubData ?? userData;
+  return loadProfileForSnailPreview(db, uid);
 }
 
 async function downloadUrlForCachedFile(
@@ -197,8 +179,7 @@ async function compositeSnailPng(
 }
 
 function storagePathFor(uid: string, size: SnailPreviewSize, fingerprint: string): string {
-  const hash = createHash("sha256").update(fingerprint).digest("hex").slice(0, 16);
-  return `snail-previews/${uid}/${size}-${hash}.png`;
+  return snailPreviewObjectPath(uid, size, fingerprint);
 }
 
 /** Composited PNG bytes — renders and caches in Storage when needed. */
@@ -221,7 +202,7 @@ export async function resolveSnailPreviewPng(
   const [exists] = await file.exists();
   if (exists) {
     const [buf] = await file.download();
-    return buf;
+    if (cachedSnailPreviewMeetsSize(buf, size)) return buf;
   }
 
   const png = await compositeSnailPng(db, look, size);

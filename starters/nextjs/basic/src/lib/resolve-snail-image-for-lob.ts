@@ -2,10 +2,13 @@ import "server-only";
 
 import type { Firestore } from "firebase-admin/firestore";
 
+import { loadProfileForSnailPreview } from "@/lib/load-snail-profile-for-preview";
+import { parseSnailLookFromProfile, snailLookFingerprint } from "@/lib/parse-snail-look";
 import {
-  findCachedSnailPreviewUrl,
+  cachedSnailPreviewMeetsSize,
+  findCachedSnailPreviewUrlForLook,
   pngBufferToDataUrl,
-  readCachedSnailPreviewPng,
+  readCachedSnailPreviewPngForLook,
   type SnailPreviewSize,
 } from "@/lib/snail-preview-cache";
 
@@ -26,13 +29,14 @@ async function loadSnailPreviewModule(): Promise<SnailPreviewModule | null> {
 }
 
 function sizesToTry(preferred: SnailPreviewSize): SnailPreviewSize[] {
-  return preferred === "hero" ? ["hero", "badge"] : [preferred];
+  // Cover snail displays large — never substitute a 256px badge (looks blurry in PDF).
+  if (preferred === "hero") return ["hero"];
+  return [preferred];
 }
 
 /**
  * Resolve a snail image for Lob letter HTML as an inline data URL when possible.
- * Lob's renderer is more reliable with embedded images than Firebase token URLs.
- * Falls back to HTTPS cache URLs, then null (placeholder in HTML).
+ * Reads the user's current snail look from Firestore and uses a fingerprinted cache key.
  */
 export async function resolveSnailImageForLob(
   db: Firestore,
@@ -42,6 +46,11 @@ export async function resolveSnailImageForLob(
   const trimmed = uid.trim();
   if (!trimmed) return null;
 
+  const profile = await loadProfileForSnailPreview(db, trimmed);
+  const look = parseSnailLookFromProfile(profile);
+  if (!look) return null;
+
+  const fingerprint = snailLookFingerprint(look);
   const sizes = sizesToTry(preferredSize);
   const preview = await loadSnailPreviewModule();
 
@@ -49,7 +58,9 @@ export async function resolveSnailImageForLob(
     for (const size of sizes) {
       try {
         const png = await preview.resolveSnailPreviewPng(db, trimmed, size);
-        if (png?.length) return pngBufferToDataUrl(png);
+        if (png?.length && cachedSnailPreviewMeetsSize(png, size)) {
+          return pngBufferToDataUrl(png);
+        }
       } catch (e) {
         console.error(`[lob-snail] preview render failed for ${trimmed} (${size})`, e);
       }
@@ -58,14 +69,16 @@ export async function resolveSnailImageForLob(
 
   for (const size of sizes) {
     try {
-      const cachedPng = await readCachedSnailPreviewPng(trimmed, size);
-      if (cachedPng?.length) return pngBufferToDataUrl(cachedPng);
+      const cachedPng = await readCachedSnailPreviewPngForLook(trimmed, size, fingerprint);
+      if (cachedPng?.length && cachedSnailPreviewMeetsSize(cachedPng, size)) {
+        return pngBufferToDataUrl(cachedPng);
+      }
     } catch (e) {
       console.error(`[lob-snail] cached PNG read failed for ${trimmed} (${size})`, e);
     }
 
     try {
-      const cachedUrl = await findCachedSnailPreviewUrl(trimmed, size);
+      const cachedUrl = await findCachedSnailPreviewUrlForLook(trimmed, size, fingerprint);
       if (cachedUrl) return cachedUrl;
     } catch (e) {
       console.error(`[lob-snail] cached URL lookup failed for ${trimmed} (${size})`, e);
