@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { buildQueueDetailPayload, type QueueDetailPayload } from "@/lib/build-print-queue-detail";
+import { buildQueueDetailForRecipient, type QueueDetailPayload } from "@/lib/build-print-queue-detail";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { requireAdminApi } from "@/lib/require-admin-api";
-import { MAX_DELIVERY_DOCS_SCAN, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
 
 function parseRecipientUids(raw: string | null): string[] {
   if (!raw?.trim()) return [];
@@ -20,7 +19,7 @@ function parseRecipientUids(raw: string | null): string[] {
 
 /**
  * Same data as `/api/printing/queue-detail` for multiple recipients, in request order.
- * One delivery-group scan + shared mailPost cache.
+ * Indexed per-recipient queries + shared mailPost cache.
  */
 export async function GET(req: Request) {
   const auth = await requireAdminApi(req);
@@ -34,21 +33,12 @@ export async function GET(req: Request) {
     }
 
     const db = getAdminDb();
-    const allDeliveryDocs = await scanAllDeliveryDocs(db);
-    if (allDeliveryDocs.length >= MAX_DELIVERY_DOCS_SCAN) {
-      return NextResponse.json(
-        {
-          error: `Too many delivery documents (>= ${MAX_DELIVERY_DOCS_SCAN}). Increase cap or add aggregation.`,
-        },
-        { status: 413 },
-      );
-    }
-
     const postCache = new Map<string, Record<string, unknown> | null>();
     const segments: QueueDetailPayload[] = [];
+
     for (const recipientUid of uids) {
       segments.push(
-        await buildQueueDetailPayload(db, recipientUid, allDeliveryDocs, postCache),
+        await buildQueueDetailForRecipient(db, recipientUid, postCache, { scope: "print_queue" }),
       );
     }
 

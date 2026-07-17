@@ -2,7 +2,11 @@ import type { DocumentSnapshot, Firestore, QueryDocumentSnapshot } from "firebas
 
 import { mailingAddressLinesFromUserDoc } from "@/lib/mailing-address";
 import { isInPrintQueue, type DeliveryDocShape, type PrintQueueItem } from "@/lib/print-fulfillment";
-import { filterDeliveryDocsForRecipient } from "@/lib/printing-delivery-scan";
+import {
+  isAwaitingPrintUnprinted,
+  queryRecipientAwaitingPrintDeliveries,
+  queryRecipientDeliveries,
+} from "@/lib/printing-delivery-scan";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export type QueueDetailPayload = {
@@ -12,6 +16,8 @@ export type QueueDetailPayload = {
   items: PrintQueueItem[];
   count: number;
 };
+
+export type QueueDetailScope = "print_queue" | "awaiting_print";
 
 export function sortKeyForItem(item: PrintQueueItem): number {
   if (item.createdAt) {
@@ -30,28 +36,33 @@ export function sortKeyForItem(item: PrintQueueItem): number {
   return 0;
 }
 
-/**
- * Build one recipient’s print queue using a pre-fetched delivery scan (shared post cache).
- */
-export async function buildQueueDetailPayload(
+function includeDocForScope(d: DeliveryDocShape, scope: QueueDetailScope): boolean {
+  if (scope === "awaiting_print") return isAwaitingPrintUnprinted(d);
+  return isInPrintQueue(d);
+}
+
+async function loadDeliveryDocs(
   db: Firestore,
   recipientUid: string,
-  allDeliveryDocs: QueryDocumentSnapshot[],
-  postCache: Map<string, Record<string, unknown> | null>,
-  options?: { userSnapshot?: DocumentSnapshot },
-): Promise<QueueDetailPayload> {
-  const recipientTrim = recipientUid.trim();
-  const userSnap =
-    options?.userSnapshot ?? (await db.collection("users").doc(recipientTrim).get());
-  const user = userSnap.exists ? serializeDoc(userSnap.data())! : null;
-  const addressLines = user ? mailingAddressLinesFromUserDoc(user) : [];
+  scope: QueueDetailScope,
+): Promise<QueryDocumentSnapshot[]> {
+  if (scope === "awaiting_print") {
+    return queryRecipientAwaitingPrintDeliveries(db, recipientUid);
+  }
+  return queryRecipientDeliveries(db, recipientUid);
+}
 
-  const qDocs = filterDeliveryDocsForRecipient(allDeliveryDocs, recipientTrim);
+async function docsToQueueItems(
+  db: Firestore,
+  docs: QueryDocumentSnapshot[],
+  scope: QueueDetailScope,
+  postCache: Map<string, Record<string, unknown> | null>,
+): Promise<PrintQueueItem[]> {
   const items: PrintQueueItem[] = [];
 
-  for (const doc of qDocs) {
+  for (const doc of docs) {
     const d = doc.data() as DeliveryDocShape;
-    if (!isInPrintQueue(d)) continue;
+    if (!includeDocForScope(d, scope)) continue;
 
     const mailPostId = typeof d.mailPostId === "string" ? d.mailPostId : "";
     if (!mailPostId) continue;
@@ -76,6 +87,25 @@ export async function buildQueueDetailPayload(
   }
 
   items.sort((a, b) => sortKeyForItem(a) - sortKeyForItem(b));
+  return items;
+}
+
+/** Build one recipient's queue via indexed per-recipient queries (scalable path). */
+export async function buildQueueDetailForRecipient(
+  db: Firestore,
+  recipientUid: string,
+  postCache: Map<string, Record<string, unknown> | null>,
+  options?: { userSnapshot?: DocumentSnapshot; scope?: QueueDetailScope },
+): Promise<QueueDetailPayload> {
+  const recipientTrim = recipientUid.trim();
+  const scope = options?.scope ?? "print_queue";
+  const userSnap =
+    options?.userSnapshot ?? (await db.collection("users").doc(recipientTrim).get());
+  const user = userSnap.exists ? serializeDoc(userSnap.data())! : null;
+  const addressLines = user ? mailingAddressLinesFromUserDoc(user) : [];
+
+  const docs = await loadDeliveryDocs(db, recipientTrim, scope);
+  const items = await docsToQueueItems(db, docs, scope, postCache);
 
   return {
     recipientUid: recipientTrim,
@@ -90,31 +120,44 @@ export async function buildQueueDetailPayload(
 export async function buildItemsFromDeliveryIds(
   db: Firestore,
   deliveryIds: string[],
-  allDeliveryDocs: QueryDocumentSnapshot[],
+  mailPostIds: string[],
+  recipientUid: string,
   postCache: Map<string, Record<string, unknown> | null>,
 ): Promise<PrintQueueItem[]> {
   const wanted = new Set(deliveryIds.filter((id) => typeof id === "string" && id.trim()));
   if (wanted.size === 0) return [];
 
+  const uid = recipientUid.trim();
   const items: PrintQueueItem[] = [];
-  for (const doc of allDeliveryDocs) {
-    if (!wanted.has(doc.id)) continue;
 
-    const d = doc.data() as DeliveryDocShape;
-    const mailPostId = typeof d.mailPostId === "string" ? d.mailPostId : "";
+  for (const deliveryId of deliveryIds) {
+    if (!wanted.has(deliveryId)) continue;
+
+    const mailPostId = mailPostIds.find((id) => deliveryId === `${id}_${uid}`);
     if (!mailPostId) continue;
 
-    let mailPost = postCache.get(mailPostId);
+    const doc = await db
+      .collection("mailPosts")
+      .doc(mailPostId)
+      .collection("deliveries")
+      .doc(deliveryId)
+      .get();
+    if (!doc.exists) continue;
+
+    const d = doc.data() as DeliveryDocShape;
+    const mailPostIdFromDoc = typeof d.mailPostId === "string" ? d.mailPostId : mailPostId;
+
+    let mailPost = postCache.get(mailPostIdFromDoc);
     if (mailPost === undefined) {
-      const ps = await db.collection("mailPosts").doc(mailPostId).get();
+      const ps = await db.collection("mailPosts").doc(mailPostIdFromDoc).get();
       mailPost = ps.exists ? serializeDoc(ps.data())! : null;
-      postCache.set(mailPostId, mailPost);
+      postCache.set(mailPostIdFromDoc, mailPost);
     }
 
     const ser = serializeDoc(doc.data())!;
     items.push({
       deliveryId: doc.id,
-      mailPostId,
+      mailPostId: mailPostIdFromDoc,
       deliveryStatus: typeof ser.deliveryStatus === "string" ? ser.deliveryStatus : undefined,
       digitalUnlockAt: typeof ser.digitalUnlockAt === "string" ? ser.digitalUnlockAt : undefined,
       createdAt: typeof ser.createdAt === "string" ? ser.createdAt : undefined,

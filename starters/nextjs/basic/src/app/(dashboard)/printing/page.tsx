@@ -22,6 +22,9 @@ type RecipientRow = {
 
 type RecipientsMeta = {
   deliveryDocumentsRead: number;
+  deliveryScanPages?: number;
+  deliveryScanComplete?: boolean;
+  deliveryScanWarnings?: string[];
   deliveryStatusCounts: Record<string, number>;
   distinctRecipientsWithDeliveries: number;
 };
@@ -69,7 +72,6 @@ export default function PrintingQueuePage() {
     try {
       const data = await apiJson<{
         recipients: RecipientRow[];
-        userCap?: number;
         meta?: RecipientsMeta;
       }>("/api/printing/recipients");
       setRecipients(data.recipients);
@@ -368,8 +370,14 @@ export default function PrintingQueuePage() {
         <div className="rounded-xl border border-[#C8D5B9]/60 bg-[#FDFBF7] px-4 py-3 text-sm text-[#5C564D]">
           <p className="font-medium text-[#2E2A24]">Fulfillment data (Firestore)</p>
           <p className="mt-1">
-            <strong>{meta.deliveryDocumentsRead}</strong> per-recipient delivery row(s) read ·{" "}
-            <strong>{meta.distinctRecipientsWithDeliveries}</strong> recipient id(s) touched · status mix:{" "}
+            <strong>{meta.deliveryDocumentsRead}</strong> delivery row(s) read
+            {typeof meta.deliveryScanPages === "number" ? (
+              <>
+                {" "}
+                across <strong>{meta.deliveryScanPages}</strong> indexed page(s)
+              </>
+            ) : null}{" "}
+            · <strong>{meta.distinctRecipientsWithDeliveries}</strong> recipient id(s) touched · status mix:{" "}
             {Object.keys(meta.deliveryStatusCounts).length === 0 ? (
               <span>—</span>
             ) : (
@@ -381,6 +389,15 @@ export default function PrintingQueuePage() {
               </span>
             )}
           </p>
+          {meta.deliveryScanComplete === false ? (
+            <p className="mt-2 text-amber-900/90">
+              Rollup scan paused before all deliveries were read. Refresh to continue from the start, or check server
+              logs for warnings.
+              {meta.deliveryScanWarnings?.length ? (
+                <span className="mt-1 block font-mono text-xs">{meta.deliveryScanWarnings.join(" ")}</span>
+              ) : null}
+            </p>
+          ) : null}
           {meta.deliveryDocumentsRead === 0 ? (
             <p className="mt-3 text-amber-900/90">
               No <code className="text-xs">mailPosts/&#123;id&#125;/deliveries</code> documents exist yet. The Flutter

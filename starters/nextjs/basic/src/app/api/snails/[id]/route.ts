@@ -43,11 +43,58 @@ export async function GET(
   }
 }
 
+type SnailLookPatch = {
+  antennaAssetId?: string;
+  bodyAssetId?: string;
+  shellAssetId?: string;
+  faceAssetId?: string;
+  accessoryAssetId?: string | null;
+  antennaColor?: number;
+  bodyColor?: number;
+  shellColor?: number;
+};
+
 type PatchBody = {
+  name?: string;
+  hometown?: string;
+  backstory?: string;
+  look?: SnailLookPatch;
   level?: number;
   xp?: number;
   appearance?: Record<string, unknown>;
 };
+
+function isValidFlutterColor(n: unknown): n is number {
+  return typeof n === "number" && Number.isFinite(n) && (n >>> 0) <= 0xffffffff;
+}
+
+function normalizeFlutterColor(n: number): number {
+  return n >>> 0;
+}
+
+function validateLookPatch(look: SnailLookPatch): string | null {
+  const requiredIds = ["antennaAssetId", "bodyAssetId", "shellAssetId", "faceAssetId"] as const;
+  for (const key of requiredIds) {
+    const value = look[key];
+    if (value !== undefined && (typeof value !== "string" || !value.trim())) {
+      return `${key} must be a non-empty string`;
+    }
+  }
+  if (
+    look.accessoryAssetId !== undefined &&
+    look.accessoryAssetId !== null &&
+    (typeof look.accessoryAssetId !== "string" || !look.accessoryAssetId.trim())
+  ) {
+    return "accessoryAssetId must be a non-empty string or null";
+  }
+  for (const key of ["antennaColor", "bodyColor", "shellColor"] as const) {
+    const value = look[key];
+    if (value !== undefined && !isValidFlutterColor(value)) {
+      return `${key} must be a valid Flutter ARGB color integer`;
+    }
+  }
+  return null;
+}
 
 /** Partial updates for support / art tweaks — merges into `users` + `publicProfiles` when embedded `snail.id` matches. */
 export async function PATCH(
@@ -66,6 +113,34 @@ export async function PATCH(
   }
 
   const patch: Record<string, unknown> = {};
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string") {
+      return NextResponse.json({ error: "name must be a string" }, { status: 400 });
+    }
+    patch.name = body.name.trim();
+  }
+  if (body.hometown !== undefined) {
+    if (typeof body.hometown !== "string") {
+      return NextResponse.json({ error: "hometown must be a string" }, { status: 400 });
+    }
+    patch.hometown = body.hometown.trim();
+  }
+  if (body.backstory !== undefined) {
+    if (typeof body.backstory !== "string") {
+      return NextResponse.json({ error: "backstory must be a string" }, { status: 400 });
+    }
+    patch.backstory = body.backstory.trim();
+  }
+  if (body.look !== undefined) {
+    if (typeof body.look !== "object" || body.look === null) {
+      return NextResponse.json({ error: "look must be an object" }, { status: 400 });
+    }
+    const lookError = validateLookPatch(body.look);
+    if (lookError) {
+      return NextResponse.json({ error: lookError }, { status: 400 });
+    }
+    patch.look = body.look;
+  }
   if (body.level !== undefined) {
     if (typeof body.level !== "number" || body.level < 1) {
       return NextResponse.json({ error: "level must be a number ≥ 1" }, { status: 400 });
@@ -104,6 +179,23 @@ export async function PATCH(
     }
 
     const nextSnail = { ...snail, ...patch };
+    if (body.look !== undefined) {
+      const existingLook =
+        snail.look && typeof snail.look === "object" && !Array.isArray(snail.look)
+          ? (snail.look as Record<string, unknown>)
+          : {};
+      const mergedLook: Record<string, unknown> = { ...existingLook, ...body.look };
+      if (body.look.accessoryAssetId === null || body.look.accessoryAssetId === "") {
+        delete mergedLook.accessoryAssetId;
+      }
+      for (const key of ["antennaColor", "bodyColor", "shellColor"] as const) {
+        const value = mergedLook[key];
+        if (typeof value === "number" && Number.isFinite(value)) {
+          mergedLook[key] = normalizeFlutterColor(value);
+        }
+      }
+      nextSnail.look = mergedLook;
+    }
 
     await db.collection("users").doc(ownerUid).set({ snail: nextSnail }, { merge: true });
     await mirrorSnailToPublicProfile(db, ownerUid, id, nextSnail);

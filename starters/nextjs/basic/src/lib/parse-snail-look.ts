@@ -12,10 +12,34 @@ export type ParsedSnailLook = {
 };
 
 export function flutterColorToHex(argb: number): string {
-  const r = (argb >> 16) & 0xff;
-  const g = (argb >> 8) & 0xff;
-  const b = argb & 0xff;
+  const unsigned = argb >>> 0;
+  const r = (unsigned >> 16) & 0xff;
+  const g = (unsigned >> 8) & 0xff;
+  const b = unsigned & 0xff;
   return `#${[r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Flutter `Color.value` (ARGB) from `#rrggbb`. */
+export function hexToFlutterColor(hex: string): number {
+  const h = hex.replace("#", "").trim();
+  if (h.length !== 6) {
+    throw new Error(`Invalid hex color: ${hex}`);
+  }
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  if ([r, g, b].some((n) => Number.isNaN(n))) {
+    throw new Error(`Invalid hex color: ${hex}`);
+  }
+  // Bitwise ops are signed 32-bit in JS; Flutter stores unsigned ARGB.
+  return ((255 << 24) | (r << 16) | (g << 8) | b) >>> 0;
+}
+
+export function parseSnailLookFromSnail(
+  snail: Record<string, unknown> | null | undefined,
+): ParsedSnailLook | null {
+  if (!snail) return null;
+  return parseSnailLookFromProfile({ snail });
 }
 
 export function parseSnailLookFromProfile(

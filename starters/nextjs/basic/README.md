@@ -4,11 +4,13 @@ Next.js operations console for **Snail Mail Social**. It reads and updates the s
 
 Access is gated by **Firebase Auth** with an **`admin: true` custom claim**. All `/api/*` routes verify the caller's ID token and reject non-admin users.
 
-## Features (first pass)
+## Features
 
-- **Users** — browse `users` docs, search by `usernames/{handle}` card, inspect mailing address + embedded snail.
-- **Snail art** — list `snails` mirrors; edit level, XP, and `appearance` JSON; changes merge into `snails/{id}` and mirror into the owner's `users` + `publicProfiles` snail when IDs match.
-- **Printing** — physical fulfillment queue (eligible sends not yet marked printed/shipped), printable pack per user, mail-batch browser.
+- **Users** — browse `users` docs, search by `usernames/{handle}` card, inspect mailing address + embedded snail; physical-mail entitlement overrides.
+- **Snail art** — asset library (upload, validate, publish); per-user snail mirrors (level, XP, appearance).
+- **Printing** — fulfillment queue, per-user + bulk print packs, Lob.com manual + auto submit, job tracking, mark fulfilled.
+
+**v1 launch scope:** Subscription-funded physical mail only. **Ad Management** (campaign review, envelope ad policy) is deferred post-launch — hide or ignore that nav section until the ad tier ships. See `../RELEASE_ROADMAP.md`.
 
 ## Local setup
 

@@ -121,12 +121,13 @@ export default function SnailMirrorsPage() {
             {rows.map((r) => (
               <tr key={r.id} className="border-t border-[#C8D5B9]/40">
                 <td className="px-4 py-3 font-mono text-xs">
-                  <Link
-                    href={`/snails/mirrors/${encodeURIComponent(r.id)}`}
-                    className="text-[#4F6E43] hover:underline"
-                  >
-                    {r.id.slice(0, 10)}…
-                  </Link>
+                  {r.ownerUid ? (
+                    <Link href={`/users/${encodeURIComponent(r.ownerUid)}`} className="text-[#4F6E43] hover:underline">
+                      {r.id.slice(0, 10)}…
+                    </Link>
+                  ) : (
+                    r.id.slice(0, 10) + "…"
+                  )}
                 </td>
                 <td className="px-4 py-3">{r.name ?? "—"}</td>
                 <td className="px-4 py-3 font-mono text-xs">

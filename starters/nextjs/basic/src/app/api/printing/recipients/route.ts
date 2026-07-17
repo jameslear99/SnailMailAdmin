@@ -1,30 +1,46 @@
-import { type QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type { Firestore } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
-import { requireAdminApi } from "@/lib/require-admin-api";
-import { MAX_DELIVERY_DOCS_SCAN } from "@/lib/printing-delivery-scan";
 import {
   consumeDeliveryIntoRollup,
   emptyRollup,
   type DeliveryDocShape,
   type RecipientRollup,
 } from "@/lib/print-fulfillment";
-
-const MAX_USERS = 500;
+import { forEachDeliveryPage } from "@/lib/printing-delivery-scan";
+import { requireAdminApi } from "@/lib/require-admin-api";
 
 type UserDoc = {
   displayName?: unknown;
   username?: unknown;
 };
 
-function readDelivery(doc: QueryDocumentSnapshot): DeliveryDocShape {
-  return doc.data() as DeliveryDocShape;
+function readDelivery(data: Record<string, unknown>): DeliveryDocShape {
+  return data as DeliveryDocShape;
+}
+
+async function loadUsersByIds(
+  db: Firestore,
+  uids: string[],
+): Promise<Map<string, UserDoc>> {
+  const out = new Map<string, UserDoc>();
+  const unique = [...new Set(uids.filter(Boolean))];
+
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100);
+    const refs = chunk.map((uid) => db.collection("users").doc(uid));
+    const snaps = await db.getAll(...refs);
+    for (const snap of snaps) {
+      if (snap.exists) out.set(snap.id, snap.data() as UserDoc);
+    }
+  }
+
+  return out;
 }
 
 /**
- * Recipient-centric printing dashboard: merge all `deliveries` with `users`
- * (cap 500 users) for queue / received / ad-slot counts.
+ * Recipient-centric printing dashboard: paginated delivery scan + per-recipient user lookup.
  */
 export async function GET(req: Request) {
   const auth = await requireAdminApi(req);
@@ -32,48 +48,33 @@ export async function GET(req: Request) {
 
   try {
     const db = getAdminDb();
-
-    const deliveriesSnap = await db.collectionGroup("deliveries").limit(MAX_DELIVERY_DOCS_SCAN).get();
-
-    if (deliveriesSnap.size >= MAX_DELIVERY_DOCS_SCAN) {
-      return NextResponse.json(
-        {
-          error: `Too many delivery documents (>= ${MAX_DELIVERY_DOCS_SCAN}). Increase cap or add aggregation.`,
-        },
-        { status: 413 },
-      );
-    }
-
     const byRecipient = new Map<string, RecipientRollup>();
     const deliveryStatusCounts: Record<string, number> = {};
-    for (const doc of deliveriesSnap.docs) {
-      const st = String((doc.data().deliveryStatus as string | undefined) ?? "").trim() || "(empty)";
-      deliveryStatusCounts[st] = (deliveryStatusCounts[st] ?? 0) + 1;
-      consumeDeliveryIntoRollup(byRecipient, readDelivery(doc));
-    }
 
-    const usersSnap = await db.collection("users").orderBy("__name__").limit(MAX_USERS).get();
+    const scanMeta = await forEachDeliveryPage(db, async (docs) => {
+      for (const doc of docs) {
+        const data = doc.data() as Record<string, unknown>;
+        const st = String((data.deliveryStatus as string | undefined) ?? "").trim() || "(empty)";
+        deliveryStatusCounts[st] = (deliveryStatusCounts[st] ?? 0) + 1;
+        consumeDeliveryIntoRollup(byRecipient, readDelivery(data));
+      }
+    });
 
-    const rows: RecipientRollup[] = [];
+    const uids = [...byRecipient.keys()];
+    const usersById = await loadUsersByIds(db, uids);
 
-    for (const u of usersSnap.docs) {
-      const uid = u.id;
-      const data = u.data() as UserDoc;
+    const rows: RecipientRollup[] = uids.map((uid) => {
       const base = byRecipient.get(uid) ?? emptyRollup(uid);
-      const displayName = typeof data.displayName === "string" ? data.displayName : undefined;
-      const username = typeof data.username === "string" ? data.username : undefined;
-      rows.push({
+      const user = usersById.get(uid);
+      const displayName = typeof user?.displayName === "string" ? user.displayName : undefined;
+      const username = typeof user?.username === "string" ? user.username : undefined;
+      return {
         ...base,
         displayName,
         username,
         recipientUid: uid,
-      });
-    }
-
-    for (const [uid, rollup] of byRecipient) {
-      if (usersSnap.docs.some((d) => d.id === uid)) continue;
-      rows.push({ ...rollup });
-    }
+      };
+    });
 
     rows.sort((a, b) => {
       if (b.queueCount !== a.queueCount) return b.queueCount - a.queueCount;
@@ -82,18 +83,27 @@ export async function GET(req: Request) {
 
     return NextResponse.json({
       recipients: rows,
-      userCap: MAX_USERS,
       meta: {
-        deliveryDocumentsRead: deliveriesSnap.size,
+        deliveryDocumentsRead: scanMeta.totalDocsRead,
+        deliveryScanPages: scanMeta.pagesScanned,
+        deliveryScanComplete: scanMeta.scanComplete,
+        deliveryScanWarnings: scanMeta.warnings,
         deliveryStatusCounts,
         distinctRecipientsWithDeliveries: byRecipient.size,
       },
     });
   } catch (e) {
     console.error(e);
-    return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Failed to load printing recipients" },
-      { status: 500 },
-    );
+    const msg = e instanceof Error ? e.message : "Failed to load printing recipients";
+    if (msg.includes("index")) {
+      return NextResponse.json(
+        {
+          error:
+            "Firestore index required for delivery rollup scan. From SnailMailSocial/, run: firebase deploy --only firestore:indexes (fieldOverrides: deliveries.createdAt collection group).",
+        },
+        { status: 500 },
+      );
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

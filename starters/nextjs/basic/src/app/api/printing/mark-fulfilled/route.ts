@@ -2,9 +2,9 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
 import { getAdminDb } from "@/lib/firebase-admin";
-import { requireAdminApi } from "@/lib/require-admin-api";
-import { MAX_DELIVERY_DOCS_SCAN, normalizedRecipientId, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
 import { isInPrintQueue, type DeliveryDocShape } from "@/lib/print-fulfillment";
+import { queryRecipientDeliveries } from "@/lib/printing-delivery-scan";
+import { requireAdminApi } from "@/lib/require-admin-api";
 
 const BATCH_LIMIT = 400;
 
@@ -40,23 +40,13 @@ function parseBody(raw: unknown): { uids: string[] } | { error: string } {
   return { error: "recipientUid or recipientUids required" };
 }
 
-async function markQueueFulfilledForRecipients(db: Firestore, uids: string[]): Promise<Map<string, number>> {
-  const uidSet = new Set(uids.map((u) => u.trim()).filter(Boolean));
-  const counts = new Map<string, number>();
-  for (const u of uidSet) counts.set(u, 0);
-
-  const allDocs = await scanAllDeliveryDocs(db);
-  if (allDocs.length >= MAX_DELIVERY_DOCS_SCAN) {
-    throw new Error(`Too many delivery documents (>= ${MAX_DELIVERY_DOCS_SCAN}). Increase cap or add aggregation.`);
-  }
-
+async function markQueueFulfilledForRecipient(db: Firestore, recipientUid: string): Promise<number> {
+  const docs = await queryRecipientDeliveries(db, recipientUid);
+  let marked = 0;
   let batch = db.batch();
   let ops = 0;
 
-  for (const doc of allDocs) {
-    const rid = normalizedRecipientId(doc.data());
-    if (!uidSet.has(rid)) continue;
-
+  for (const doc of docs) {
     const d = doc.data() as DeliveryDocShape;
     if (!isInPrintQueue(d)) continue;
 
@@ -64,11 +54,12 @@ async function markQueueFulfilledForRecipients(db: Firestore, uids: string[]): P
       doc.ref,
       {
         physicalPrintedAt: FieldValue.serverTimestamp(),
+        isPhysicallyPrinted: true,
       },
       { merge: true },
     );
-    ops++;
-    counts.set(rid, (counts.get(rid) ?? 0) + 1);
+    marked += 1;
+    ops += 1;
 
     if (ops >= BATCH_LIMIT) {
       await batch.commit();
@@ -81,6 +72,16 @@ async function markQueueFulfilledForRecipients(db: Firestore, uids: string[]): P
     await batch.commit();
   }
 
+  return marked;
+}
+
+async function markQueueFulfilledForRecipients(db: Firestore, uids: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const uid of uids) {
+    const trimmed = uid.trim();
+    if (!trimmed) continue;
+    counts.set(trimmed, await markQueueFulfilledForRecipient(db, trimmed));
+  }
   return counts;
 }
 

@@ -15,6 +15,9 @@ export const DELIVERY_STATUS_EXCLUDED_FROM_MAILBOX = new Set([
   "missing_address",
 ]);
 
+/** Digital-only — no physical print obligation. */
+export const DELIVERY_STATUS_DIGITAL_ONLY = "digital_only";
+
 /** @deprecated Use [DELIVERY_STATUS_EXCLUDED_FROM_MAILBOX]. */
 export const DELIVERY_STATUS_EXCLUDED = DELIVERY_STATUS_EXCLUDED_FROM_MAILBOX;
 
@@ -29,6 +32,8 @@ export type DeliveryDocShape = {
   senderSelectedAdIds?: unknown;
   platformAssignedAdId?: string | null;
   physicalPrintedAt?: unknown;
+  /** Denormalized flag for indexed print-queue queries (false until physically sent). */
+  isPhysicallyPrinted?: boolean;
   /** Fan-out time (ISO string or Firestore Timestamp). */
   createdAt?: unknown;
 };
@@ -52,6 +57,7 @@ export function countsAdSlots(d: DeliveryDocShape): number {
 }
 
 export function hasPhysicalPrint(d: DeliveryDocShape): boolean {
+  if (d.isPhysicallyPrinted === true) return true;
   const t = d.physicalPrintedAt;
   return t != null && t !== "";
 }
@@ -66,10 +72,11 @@ export function isDigitallyReceived(d: DeliveryDocShape): boolean {
   return isEligibleMailRow(d) && d.isDigitallyUnlocked === true;
 }
 
-/** Physical ops queue: any real postcard obligation not yet marked printed (incl. missing_address). */
+/** Physical ops queue: entitled postcard obligations not yet printed. */
 export function isInPrintQueue(d: DeliveryDocShape): boolean {
   const st = d.deliveryStatus ?? "";
   if (DELIVERY_STATUS_NO_POSTCARD.has(st)) return false;
+  if (st === DELIVERY_STATUS_DIGITAL_ONLY) return false;
   return !hasPhysicalPrint(d);
 }
 
