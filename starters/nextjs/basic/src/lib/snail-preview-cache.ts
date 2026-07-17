@@ -1,14 +1,19 @@
+import "server-only";
+
 import { createHash } from "crypto";
 
 import { getAdminBucket } from "@/lib/firebase-admin";
 import {
   firebaseStorageDownloadUrl,
 } from "@/lib/firebase-storage-url";
+import {
+  BADGE_SNAIL_PX,
+  HERO_SNAIL_PX,
+  type SnailPreviewSize,
+} from "@/lib/lob-letter-layout";
 
-export type SnailPreviewSize = "badge" | "hero";
-
-/** Render target for cover snail (~2.2in at 300 DPI). */
-export const HERO_SNAIL_PX = 672;
+export type { SnailPreviewSize } from "@/lib/lob-letter-layout";
+export { HERO_SNAIL_PX } from "@/lib/lob-letter-layout";
 
 export function snailPreviewObjectPath(
   uid: string,
@@ -108,7 +113,7 @@ export function pngBufferToDataUrl(png: Buffer): string {
 }
 
 const MIN_PX: Record<SnailPreviewSize, number> = {
-  badge: 256,
+  badge: BADGE_SNAIL_PX,
   hero: HERO_SNAIL_PX,
 };
 

@@ -25,16 +25,16 @@ import {
 import {
   findCachedSnailPreviewUrl,
   cachedSnailPreviewMeetsSize,
-  HERO_SNAIL_PX,
   snailPreviewObjectPath,
   type SnailPreviewSize,
 } from "@/lib/snail-preview-cache";
+import { BADGE_SNAIL_PX, HERO_SNAIL_PX } from "@/lib/lob-letter-layout";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export type { SnailPreviewSize } from "@/lib/snail-preview-cache";
 
 const OUTPUT_PX: Record<SnailPreviewSize, number> = {
-  badge: 256,
+  badge: BADGE_SNAIL_PX,
   hero: HERO_SNAIL_PX,
 };
 

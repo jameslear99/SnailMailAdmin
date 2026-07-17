@@ -16,7 +16,7 @@ import {
   type LobProductType,
   type ReturnAddressRequiredField,
 } from "@/lib/lob-fulfillment-settings";
-import { POSTCARDS_COVER_PAGE, POSTCARDS_PER_CONTENT_PAGE } from "@/lib/build-lob-letter-html";
+import { POSTCARDS_COVER_PAGE, POSTCARDS_PER_CONTENT_PAGE } from "@/lib/lob-letter-layout";
 
 const RETURN_ADDRESS_FIELDS: {
   key: keyof LobFulfillmentSettings["returnAddress"];

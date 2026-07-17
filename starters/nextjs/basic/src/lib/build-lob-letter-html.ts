@@ -1,3 +1,5 @@
+import "server-only";
+
 /**
  * HTML for Lob US-letter jobs.
  *
@@ -8,17 +10,19 @@
 
 import type { EnrichedPrintQueueItem } from "@/lib/enrich-lob-letter-items";
 import { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
-import { HERO_SNAIL_PX } from "@/lib/snail-preview-cache";
+import {
+  HERO_SNAIL_PX,
+  POSTCARDS_COVER_PAGE,
+  POSTCARDS_PER_CONTENT_PAGE,
+  POSTCARDS_PER_LOB_LETTER_MAX,
+} from "@/lib/lob-letter-layout";
 import { formatSentOnDate } from "@/lib/postcard-print-utils";
 
-/** Posts on the cover page (bottom row only). */
-export const POSTCARDS_COVER_PAGE = 2;
-
-/** Posts on each subsequent content page (all four quadrants). */
-export const POSTCARDS_PER_CONTENT_PAGE = 4;
-
-/** Practical max per Lob letter file (cover + 14 content pages). */
-export const POSTCARDS_PER_LOB_LETTER_MAX = POSTCARDS_COVER_PAGE + POSTCARDS_PER_CONTENT_PAGE * 14;
+export {
+  POSTCARDS_COVER_PAGE,
+  POSTCARDS_PER_CONTENT_PAGE,
+  POSTCARDS_PER_LOB_LETTER_MAX,
+} from "@/lib/lob-letter-layout";
 
 /** @deprecated Use POSTCARDS_PER_LOB_LETTER_MAX — kept for imports. */
 export const POSTCARDS_PER_LOB_LETTER_DOUBLE_SIDED = POSTCARDS_PER_LOB_LETTER_MAX;
