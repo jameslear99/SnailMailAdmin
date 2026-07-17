@@ -2,7 +2,6 @@ import "server-only";
 
 import type { Firestore } from "firebase-admin/firestore";
 
-import { resolveSnailPreviewUrl } from "@/lib/render-snail-preview-server";
 import type { PrintQueueItem } from "@/lib/print-fulfillment";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
@@ -15,6 +14,20 @@ export type LobLetterEnrichment = {
   items: EnrichedPrintQueueItem[];
   recipientSnailImageUrl?: string;
 };
+
+async function safeSnailPreviewUrl(
+  db: Firestore,
+  uid: string,
+  size: "badge" | "hero",
+): Promise<string | null> {
+  try {
+    const { resolveSnailPreviewUrl } = await import("@/lib/render-snail-preview-server");
+    return await resolveSnailPreviewUrl(db, uid, size);
+  } catch (e) {
+    console.error(`[lob-enrich] snail preview failed for ${uid} (${size})`, e);
+    return null;
+  }
+}
 
 async function loadUsername(db: Firestore, uid: string): Promise<string | undefined> {
   const pub = await db.collection("publicProfiles").doc(uid).get();
@@ -63,7 +76,7 @@ export async function enrichItemsForLobLetter(
     [...senderUids].map(async (uid) => {
       const [username, snailUrl] = await Promise.all([
         loadUsername(db, uid),
-        resolveSnailPreviewUrl(db, uid, "badge"),
+        safeSnailPreviewUrl(db, uid, "badge"),
       ]);
       if (username) usernameByUid.set(uid, username);
       if (snailUrl) snailBadgeByUid.set(uid, snailUrl);
@@ -71,7 +84,7 @@ export async function enrichItemsForLobLetter(
   );
 
   const recipientSnailImageUrl =
-    (await resolveSnailPreviewUrl(db, recipientUid.trim(), "hero")) ?? undefined;
+    (await safeSnailPreviewUrl(db, recipientUid.trim(), "hero")) ?? undefined;
 
   const enriched: EnrichedPrintQueueItem[] = items.map((item) => {
     const senderUid = senderUidFromItem(item);

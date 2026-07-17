@@ -11,6 +11,7 @@ import { buildItemsFromDeliveryIds, buildQueueDetailForRecipient } from "@/lib/b
 import { enrichItemsForLobLetter } from "@/lib/enrich-lob-letter-items";
 import { returnAddressToLobAddress, userDocToLobAddress } from "@/lib/lob-address";
 import { createLobLetter, formatLobSubmitErrorMessage, lobConfigured, type LobApiError } from "@/lib/lob-client";
+import { lobSecretMisconfigurationReason } from "@/lib/lob-credentials";
 import { resolveLobLetterFile } from "@/lib/upload-lob-letter-html";
 import {
   lobLetterSizeForProduct,
@@ -134,6 +135,9 @@ export async function submitLobJobsForRecipients(
   }
 
   if (!(await lobConfigured(db, settings.lobEnvironment))) {
+    const reason =
+      (await lobSecretMisconfigurationReason(db, settings.lobEnvironment)) ??
+      `LOB API key not configured for ${settings.lobEnvironment} mode`;
     return {
       submitted: 0,
       skipped: 0,
@@ -141,7 +145,7 @@ export async function submitLobJobsForRecipients(
       results: uniqueUids.map((recipientUid) => ({
         recipientUid,
         status: "failed",
-        reason: `LOB API key not configured for ${settings.lobEnvironment} mode`,
+        reason,
       })),
     };
   }
@@ -166,7 +170,13 @@ export async function submitLobJobsForRecipients(
   }
   const lobFrom = fromResult.address;
 
-  const busyDeliveryIds = await loadBusyDeliveryIds(db);
+  let busyDeliveryIds: Set<string>;
+  try {
+    busyDeliveryIds = await loadBusyDeliveryIds(db);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Failed to load active print jobs";
+    throw new Error(`Could not load print job state: ${msg}`);
+  }
   const postCache = new Map<string, Record<string, unknown> | null>();
   const results: SubmitRecipientResult[] = [];
   let submitted = 0;
@@ -391,8 +401,7 @@ export async function submitLobJobsForRecipients(
         }
       } catch (e) {
         localFailed += 1;
-        const err = e as LobApiError;
-        const msg = err?.message ?? (e instanceof Error ? e.message : "Submit failed");
+        const msg = e instanceof Error ? e.message : "Submit failed";
         localResults.push({ recipientUid: uid, status: "failed", reason: msg });
       }
 
