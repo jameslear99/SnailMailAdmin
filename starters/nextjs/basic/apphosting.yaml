@@ -13,12 +13,6 @@ env:
     availability:
       - RUNTIME
 
-  # Set in Firebase console / Secret Manager — same value as Cloud Functions LOB_AUTO_CRON_SECRET
-  - variable: LOB_AUTO_CRON_SECRET
-    secret: LOB_AUTO_CRON_SECRET
-    availability:
-      - RUNTIME
-
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: AIzaSyD2z_pZjWM_BudS92n3gR7cLpaKfVA_7U8
     availability:
