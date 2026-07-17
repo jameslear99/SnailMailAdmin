@@ -8,6 +8,7 @@ const appRoot = path.resolve(".");
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: appRoot,
+  serverExternalPackages: ["sharp"],
   turbopack: {
     root: appRoot,
   },
