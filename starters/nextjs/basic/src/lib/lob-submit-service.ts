@@ -125,7 +125,6 @@ function letterHtmlOptions(
     thankYouMessage: settings.letterFormat.thankYouMessage,
     showRecipientSnailOnCover: settings.letterFormat.showRecipientSnailOnCover,
     doubleSided: settings.doubleSided,
-    layout: settings.letterLayout,
   };
 }
 

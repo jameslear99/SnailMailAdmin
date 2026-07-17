@@ -3,25 +3,18 @@ import "server-only";
 /**
  * HTML for Lob US-letter jobs.
  *
- * Single-sided: page 1 = intro + two posts; page 2+ = 4-up grid.
- * Double-sided: page 1 = intro (address window); page 2 = two cover posts (sheet 1 back);
- * page 3+ = 4-up grids on subsequent sheets.
+ * Page 1: recipient snail, thank-you copy, first two posts (bottom row).
+ * Page 2+: four posts per page in a 2×2 grid.
  */
 
 import type { EnrichedPrintQueueItem } from "@/lib/enrich-lob-letter-items";
 import { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
 import {
+  HERO_SNAIL_PX,
   POSTCARDS_COVER_PAGE,
   POSTCARDS_PER_CONTENT_PAGE,
   POSTCARDS_PER_LOB_LETTER_MAX,
 } from "@/lib/lob-letter-layout";
-import {
-  buildLobLetterStylesheet,
-  coverSnailRenderPx,
-  DEFAULT_LOB_LETTER_LAYOUT,
-  type LobLetterLayoutSettings,
-  type LobLetterPostSlot,
-} from "@/lib/lob-letter-template";
 import { formatSentOnDate } from "@/lib/postcard-print-utils";
 
 export {
@@ -44,6 +37,12 @@ export function postcardsPerLobLetter(_doubleSided?: boolean): number {
 export const THANK_YOU_MESSAGE = DEFAULT_LOB_THANK_YOU_MESSAGE;
 
 const SNAIL_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="56" height="56" aria-hidden="true"><ellipse cx="16" cy="20" rx="11" ry="8" fill="#8B9E7A"/><circle cx="16" cy="12" r="6" fill="#6E8B5E"/><circle cx="14" cy="11" r="1.2" fill="#2E2A24"/><path d="M20 10c2 1 3 3 3 5" stroke="#5C564D" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
+
+const COVER_SNAIL_IN = 1.85;
+const COVER_QUAD_HEIGHT_IN = 3.85;
+const GRID_QUAD_HEIGHT_IN = 4.75;
+const QUAD_PHOTO_IN = 2.5;
+const QUAD_COLUMN_WIDTH_IN = 4;
 
 function escapeHtml(s: string): string {
   return s
@@ -84,174 +83,45 @@ function sentDateLabel(item: EnrichedPrintQueueItem): string {
   return formatSentOnDate(sent);
 }
 
-export function enrichedItemToPostSlot(item: EnrichedPrintQueueItem): LobLetterPostSlot {
-  return {
-    caption: postcardCaption(item),
-    sentDateLabel: sentDateLabel(item),
-    senderLabel: senderUsernameLabel(item),
-    photoUrl: postcardImageUrl(item) ?? undefined,
-    senderSnailUrl: item.senderSnailImageUrl?.trim() || undefined,
-  };
+function quadContentStyle(): string {
+  const insetIn = (QUAD_COLUMN_WIDTH_IN - QUAD_PHOTO_IN) / 2;
+  return `width:${QUAD_PHOTO_IN}in;margin:${insetIn}in auto 0;`;
 }
 
-export function enrichedItemsToPostSlots(items: EnrichedPrintQueueItem[]): LobLetterPostSlot[] {
-  return items.map(enrichedItemToPostSlot);
+function quadPhotoStyle(): string {
+  return `width:${QUAD_PHOTO_IN}in;height:${QUAD_PHOTO_IN}in;`;
 }
 
-type LetterPage =
-  | {
-      kind: "cover";
-      slots: [LobLetterPostSlot | undefined, LobLetterPostSlot | undefined];
-    }
-  | {
-      kind: "cover-front";
-    }
-  | {
-      kind: "cover-back";
-      slots: [LobLetterPostSlot | undefined, LobLetterPostSlot | undefined];
-    }
-  | {
-      kind: "grid";
-      slots: [
-        LobLetterPostSlot | undefined,
-        LobLetterPostSlot | undefined,
-        LobLetterPostSlot | undefined,
-        LobLetterPostSlot | undefined,
-      ];
-    };
-
-export function paginatePostcardsForLetter(
-  items: LobLetterPostSlot[],
-  doubleSided = false,
-): LetterPage[] {
-  const pages: LetterPage[] = [];
-  if (items.length === 0) return pages;
-
-  if (doubleSided) {
-    pages.push({ kind: "cover-front" });
-    pages.push({
-      kind: "cover-back",
-      slots: [items[0], items[1]],
-    });
-  } else {
-    pages.push({
-      kind: "cover",
-      slots: [items[0], items[1]],
-    });
-  }
-
-  for (let i = POSTCARDS_COVER_PAGE; i < items.length; i += POSTCARDS_PER_CONTENT_PAGE) {
-    const slots: [
-      LobLetterPostSlot | undefined,
-      LobLetterPostSlot | undefined,
-      LobLetterPostSlot | undefined,
-      LobLetterPostSlot | undefined,
-    ] = [items[i], items[i + 1], items[i + 2], items[i + 3]];
-    if (slots.every((slot) => !slot)) continue;
-    pages.push({ kind: "grid", slots });
-  }
-
-  return pages;
-}
-
-/** HTML sheet count for a letter batch (used for Lob print options). */
-export function lobLetterSheetCount(items: LobLetterPostSlot[], doubleSided = false): number {
-  return paginatePostcardsForLetter(items.slice(0, POSTCARDS_PER_LOB_LETTER_MAX), doubleSided).length;
-}
-
-function renderCoverSnail(
-  recipientSnailImageUrl: string | undefined,
-  layout: LobLetterLayoutSettings,
-  previewMode: boolean,
-  showRecipientSnail: boolean,
-): string {
-  if (!showRecipientSnail) return "";
-
-  const renderPx = coverSnailRenderPx(layout);
-
-  if (recipientSnailImageUrl?.trim()) {
-    return `<div class="cover-intro-snail-wrap">
-        <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" width="${renderPx}" height="${renderPx}" />
-      </div>`;
-  }
-
-  if (previewMode) {
-    return `<div class="cover-intro-snail-wrap">
-        <div class="cover-snail cover-snail--placeholder" style="width:${layout.coverSnailSizeIn}in;height:${layout.coverSnailSizeIn}in;">Recipient snail</div>
-      </div>`;
-  }
-
-  return `<div class="cover-intro-snail-wrap">
-      <div class="cover-snail cover-snail--placeholder" style="width:${layout.coverSnailSizeIn}in;height:${layout.coverSnailSizeIn}in;">Snail unavailable</div>
-    </div>`;
-}
-
-function renderCoverIntro(
-  recipientSnailImageUrl: string | undefined,
-  thankYouMessage: string,
-  layout: LobLetterLayoutSettings,
-  previewMode: boolean,
-  showRecipientSnail: boolean,
-): string {
-  const snailBlock = renderCoverSnail(recipientSnailImageUrl, layout, previewMode, showRecipientSnail);
-
-  return `
-    <div class="cover-intro">
-      ${snailBlock}
-      <p class="thanks">${escapeHtml(thankYouMessage)}</p>
-    </div>
-  `;
-}
-
-function renderSnailBadge(
-  slot: LobLetterPostSlot,
-  layout: LobLetterLayoutSettings,
-  previewMode: boolean,
-): string {
-  const name = escapeHtml(slot.senderLabel);
-  const px = layout.badgeSnailPx;
-
-  if (previewMode) {
-    return `<div class="quad-snail--placeholder" style="width:${px}px;height:${px}px;">Snail</div>`;
-  }
-
-  const snailUrl = slot.senderSnailUrl?.trim();
+function renderSnailBadge(item: EnrichedPrintQueueItem): string {
+  const snailUrl = item.senderSnailImageUrl?.trim();
+  const name = escapeHtml(senderUsernameLabel(item));
   if (snailUrl) {
-    return `<img src="${escapeHtml(snailUrl)}" alt="${name}" width="${px}" height="${px}" class="quad-snail-img" />`;
+    return `<img src="${escapeHtml(snailUrl)}" alt="${name}" width="56" height="56" class="quad-snail-img" />`;
   }
-
   return `<span class="quad-snail-fallback">${SNAIL_PLACEHOLDER_SVG}</span>`;
 }
 
-function renderPostCell(
-  slot: LobLetterPostSlot | undefined,
-  layout: LobLetterLayoutSettings,
-  previewMode: boolean,
-): string {
-  if (!slot) {
+function renderPostCell(item: EnrichedPrintQueueItem | undefined): string {
+  if (!item) {
     return `<td class="quad-cell quad-cell--empty">&nbsp;</td>`;
   }
 
-  const caption = escapeHtml(slot.caption);
-  const date = escapeHtml(slot.sentDateLabel);
-  const fromLabel = escapeHtml(slot.senderLabel);
-  const snail = renderSnailBadge(slot, layout, previewMode);
+  const caption = escapeHtml(postcardCaption(item));
+  const date = escapeHtml(sentDateLabel(item));
+  const fromLabel = escapeHtml(senderUsernameLabel(item));
+  const imageUrl = postcardImageUrl(item);
+  const snail = renderSnailBadge(item);
 
-  let imageBlock: string;
-  if (previewMode) {
-    imageBlock = `<div class="quad-photo quad-photo--placeholder">Photo</div>`;
-  } else if (slot.photoUrl?.trim()) {
-    imageBlock = `<img class="quad-photo" src="${escapeHtml(slot.photoUrl.trim())}" alt="" />`;
-  } else {
-    imageBlock = `<div class="quad-photo quad-photo--missing">No photo</div>`;
-  }
+  const imageBlock = imageUrl
+    ? `<img class="quad-photo" style="${quadPhotoStyle()}" src="${escapeHtml(imageUrl)}" alt="" />`
+    : `<div class="quad-photo quad-photo--missing" style="${quadPhotoStyle()}">No photo</div>`;
 
   return `
     <td class="quad-cell">
       <table class="quad-layout" cellpadding="0" cellspacing="0" width="100%" height="100%">
         <tr>
           <td class="quad-main" valign="top">
-            <div class="quad-content">
+            <div class="quad-content" style="${quadContentStyle()}">
               <div class="quad-photo-wrap">${imageBlock}</div>
               ${caption ? `<p class="quad-caption">${caption}</p>` : `<p class="quad-caption quad-caption--empty">&nbsp;</p>`}
             </div>
@@ -276,61 +146,84 @@ function renderPostCell(
   `;
 }
 
-type RenderPageOptions = {
-  recipientSnailImageUrl?: string;
-  thankYouMessage: string;
-  showRecipientSnail: boolean;
-  layout: LobLetterLayoutSettings;
-  previewMode: boolean;
-};
+type LetterPage =
+  | {
+      kind: "cover";
+      slots: [
+        EnrichedPrintQueueItem | undefined,
+        EnrichedPrintQueueItem | undefined,
+      ];
+    }
+  | {
+      kind: "grid";
+      slots: [
+        EnrichedPrintQueueItem | undefined,
+        EnrichedPrintQueueItem | undefined,
+        EnrichedPrintQueueItem | undefined,
+        EnrichedPrintQueueItem | undefined,
+      ];
+    };
 
-function renderPage(page: LetterPage, pageOpts: RenderPageOptions): string {
-  const cell = (slot: LobLetterPostSlot | undefined) =>
-    renderPostCell(slot, pageOpts.layout, pageOpts.previewMode);
+export function paginatePostcardsForLetter(items: EnrichedPrintQueueItem[]): LetterPage[] {
+  const pages: LetterPage[] = [];
+  if (items.length === 0) return pages;
 
-  if (page.kind === "cover-front") {
-    return `
-      <div class="sheet sheet--cover sheet--cover-front">
-        ${renderCoverIntro(
-          pageOpts.recipientSnailImageUrl,
-          pageOpts.thankYouMessage,
-          pageOpts.layout,
-          pageOpts.previewMode,
-          pageOpts.showRecipientSnail,
-        )}
-      </div>
-    `;
+  pages.push({
+    kind: "cover",
+    slots: [items[0], items[1]],
+  });
+
+  for (let i = POSTCARDS_COVER_PAGE; i < items.length; i += POSTCARDS_PER_CONTENT_PAGE) {
+    const slots: [
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+      EnrichedPrintQueueItem | undefined,
+    ] = [items[i], items[i + 1], items[i + 2], items[i + 3]];
+    if (slots.every((slot) => !slot)) continue;
+    pages.push({ kind: "grid", slots });
   }
 
-  if (page.kind === "cover-back") {
-    const [left, right] = page.slots;
-    return `
-      <div class="sheet sheet--cover sheet--cover-back">
-        <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
-          <tr>
-            ${cell(left)}
-            ${cell(right)}
-          </tr>
-        </table>
-      </div>
-    `;
-  }
+  return pages;
+}
 
+function renderCoverIntro(
+  recipientSnailImageUrl: string | undefined,
+  thankYouMessage: string,
+  showRecipientSnail: boolean,
+): string {
+  const snailBlock =
+    showRecipientSnail && recipientSnailImageUrl?.trim()
+      ? `<div class="cover-intro-snail-wrap">
+          <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" width="${HERO_SNAIL_PX}" height="${HERO_SNAIL_PX}" />
+        </div>`
+      : showRecipientSnail
+        ? `<div class="cover-intro-snail-wrap"><span class="cover-snail-fallback">${SNAIL_PLACEHOLDER_SVG}</span></div>`
+        : "";
+
+  return `
+    <div class="cover-intro">
+      ${snailBlock}
+      <p class="thanks">${escapeHtml(thankYouMessage)}</p>
+    </div>
+  `;
+}
+
+function renderPage(
+  page: LetterPage,
+  recipientSnailImageUrl: string | undefined,
+  thankYouMessage: string,
+  showRecipientSnail: boolean,
+): string {
   if (page.kind === "cover") {
     const [left, right] = page.slots;
     return `
       <div class="sheet sheet--cover">
-        ${renderCoverIntro(
-          pageOpts.recipientSnailImageUrl,
-          pageOpts.thankYouMessage,
-          pageOpts.layout,
-          pageOpts.previewMode,
-          pageOpts.showRecipientSnail,
-        )}
+        ${renderCoverIntro(recipientSnailImageUrl, thankYouMessage, showRecipientSnail)}
         <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
           <tr>
-            ${cell(left)}
-            ${cell(right)}
+            ${renderPostCell(left)}
+            ${renderPostCell(right)}
           </tr>
         </table>
       </div>
@@ -342,12 +235,12 @@ function renderPage(page: LetterPage, pageOpts: RenderPageOptions): string {
     <div class="sheet sheet--grid">
       <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
         <tr>
-          ${cell(tl)}
-          ${cell(tr)}
+          ${renderPostCell(tl)}
+          ${renderPostCell(tr)}
         </tr>
         <tr>
-          ${cell(bl)}
-          ${cell(br)}
+          ${renderPostCell(bl)}
+          ${renderPostCell(br)}
         </tr>
       </table>
     </div>
@@ -360,44 +253,7 @@ export type BuildLobLetterHtmlOptions = {
   thankYouMessage?: string;
   showRecipientSnailOnCover?: boolean;
   doubleSided?: boolean;
-  layout?: LobLetterLayoutSettings;
-  previewMode?: boolean;
 };
-
-/** Build Lob `file` HTML from post slots (real or sample). */
-export function buildLobLetterHtmlFromSlots(
-  slots: LobLetterPostSlot[],
-  options?: BuildLobLetterHtmlOptions,
-): string {
-  const opts = options ?? {};
-  const thankYouMessage = opts.thankYouMessage?.trim() || DEFAULT_LOB_THANK_YOU_MESSAGE;
-  const doubleSided = opts.doubleSided ?? false;
-  const layout = opts.layout ?? DEFAULT_LOB_LETTER_LAYOUT;
-  const previewMode = opts.previewMode ?? false;
-  const showRecipientSnail = opts.showRecipientSnailOnCover !== false;
-  const packed = slots.slice(0, POSTCARDS_PER_LOB_LETTER_MAX);
-  const pages = paginatePostcardsForLetter(packed, doubleSided);
-  const pageOpts: RenderPageOptions = {
-    recipientSnailImageUrl: opts.recipientSnailImageUrl,
-    thankYouMessage,
-    showRecipientSnail,
-    layout,
-    previewMode,
-  };
-  const body = pages.map((p) => renderPage(p, pageOpts)).join("\n");
-  const css = buildLobLetterStylesheet(layout, { previewMode });
-
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <style>${css}</style>
-</head>
-<body>
-  ${body}
-</body>
-</html>`;
-}
 
 /** Build Lob `file` HTML for enriched queue items. */
 export function buildLobLetterHtml(
@@ -406,8 +262,196 @@ export function buildLobLetterHtml(
 ): string {
   const opts: BuildLobLetterHtmlOptions =
     typeof options === "string" ? { recipientName: options } : (options ?? {});
+  const thankYouMessage = opts.thankYouMessage?.trim() || DEFAULT_LOB_THANK_YOU_MESSAGE;
+  const showRecipientSnail = opts.showRecipientSnailOnCover !== false;
+  const packed = items.slice(0, POSTCARDS_PER_LOB_LETTER_MAX);
+  const pages = paginatePostcardsForLetter(packed);
+  const body = pages
+    .map((p) =>
+      renderPage(p, opts.recipientSnailImageUrl, thankYouMessage, showRecipientSnail),
+    )
+    .join("\n");
 
-  return buildLobLetterHtmlFromSlots(enrichedItemsToPostSlots(items), opts);
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page { size: letter; margin: 0.25in; }
+    * { box-sizing: border-box; }
+    html, body {
+      font-family: Georgia, 'Times New Roman', serif;
+      color: #2E2A24;
+      margin: 0;
+      padding: 0;
+    }
+    .sheet {
+      width: 8in;
+      margin: 0 auto;
+      page-break-inside: avoid;
+      page-break-after: always;
+    }
+    .sheet:last-child { page-break-after: auto; }
+    .sheet + .sheet { page-break-before: always; }
+    .sheet--cover {
+      padding-top: 2.65in;
+    }
+    .cover-intro {
+      width: 100%;
+      padding: 0 0.55in 0.12in;
+      box-sizing: border-box;
+    }
+    .cover-intro-snail-wrap {
+      text-align: center;
+      margin: 0 0 0.12in;
+      line-height: 0;
+    }
+    .thanks {
+      margin: 0;
+      padding: 0 0.12in;
+      font-size: 10.5pt;
+      line-height: 1.4;
+      text-align: left;
+      color: #2E2A24;
+    }
+    .cover-snail {
+      height: ${COVER_SNAIL_IN}in;
+      width: ${COVER_SNAIL_IN}in;
+      display: inline-block;
+      object-fit: contain;
+    }
+    .cover-snail-fallback {
+      display: inline-block;
+      line-height: 0;
+    }
+    .cover-snail-fallback svg {
+      width: ${COVER_SNAIL_IN}in;
+      height: ${COVER_SNAIL_IN}in;
+    }
+    .quad-table {
+      width: 100%;
+      table-layout: fixed;
+      border-collapse: collapse;
+    }
+    .quad-cell {
+      width: 50%;
+      vertical-align: top;
+      padding: 0;
+      border: 1px solid #D0C8BC;
+    }
+    .quad-cell--empty {
+      border: 1px solid #D0C8BC;
+    }
+    .quad-layout {
+      width: 100%;
+      height: 100%;
+    }
+    .quad-main {
+      vertical-align: top;
+      padding: 0 0 0.06in;
+    }
+    .quad-content {
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .quad-photo-wrap {
+      padding: 0;
+      text-align: center;
+      line-height: 0;
+    }
+    .quad-photo {
+      object-fit: cover;
+      border-radius: 2px;
+      display: block;
+      margin: 0 auto;
+      background: #E8E4DC;
+      max-width: 100%;
+    }
+    .quad-photo--missing {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 8pt;
+      color: #888;
+      font-style: italic;
+    }
+    .quad-caption {
+      margin: 0.08in 0 0;
+      padding: 0;
+      font-size: 8.5pt;
+      line-height: 1.4;
+      max-height: 0.58in;
+      overflow: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      text-align: left;
+    }
+    .quad-caption--empty { visibility: hidden; }
+    .quad-foot {
+      padding: 0 0 0.1in;
+    }
+    .quad-foot-snail {
+      text-align: center;
+      line-height: 0;
+    }
+    .quad-foot-block {
+      width: 58%;
+      margin: 0 auto;
+    }
+    .quad-foot-rule {
+      border-top: 1px solid #D8D2C8;
+      width: 100%;
+      margin: 0.05in 0 0.04in;
+      height: 0;
+      line-height: 0;
+      font-size: 0;
+    }
+    .quad-meta { width: 100%; }
+    .quad-sent {
+      font-size: 7pt;
+      color: #5C564D;
+      white-space: nowrap;
+      vertical-align: middle;
+      padding-left: 0.02in;
+    }
+    .quad-from {
+      margin: 0;
+      font-size: 7.5pt;
+      color: #5C564D;
+      text-align: right;
+      font-style: italic;
+      vertical-align: middle;
+      white-space: nowrap;
+      padding-right: 0.02in;
+    }
+    .quad-snail-img {
+      width: 56px;
+      height: 56px;
+      display: block;
+      margin: 0 auto;
+      object-fit: contain;
+    }
+    .quad-snail-fallback {
+      display: block;
+      width: 56px;
+      height: 56px;
+      line-height: 0;
+      margin: 0 auto;
+    }
+    .sheet--cover .quad-cell,
+    .sheet--cover .quad-layout {
+      height: ${COVER_QUAD_HEIGHT_IN}in;
+    }
+    .sheet--grid .quad-cell,
+    .sheet--grid .quad-layout {
+      height: ${GRID_QUAD_HEIGHT_IN}in;
+    }
+  </style>
+</head>
+<body>
+  ${body}
+</body>
+</html>`;
 }
 
 /** Split queue items into Lob letter batches. */

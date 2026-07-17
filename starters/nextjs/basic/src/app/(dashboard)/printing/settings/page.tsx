@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PrintingSubnav } from "@/components/printing/printing-subnav";
 import { LobCredentialsSection } from "@/components/printing/lob-credentials-section";
-import { LobLetterTemplateEditor } from "@/components/printing/lob-letter-template-editor";
 import { apiFetch, apiJson } from "@/lib/api-fetch";
 import {
   DEFAULT_LOB_FULFILLMENT_SETTINGS,
@@ -14,7 +13,6 @@ import {
   returnAddressValidationMessage,
   type LobFulfillmentSettings,
   type LobLetterFormatSettings,
-  type LobLetterLayoutSettings,
   type LobProductType,
   type ReturnAddressRequiredField,
 } from "@/lib/lob-fulfillment-settings";
@@ -98,13 +96,6 @@ export default function LobSettingsPage() {
     setSaveError(null);
     setSettings((prev) =>
       prev ? { ...prev, letterFormat: { ...prev.letterFormat, ...patch } } : prev,
-    );
-  }
-
-  function updateLetterLayout(patch: Partial<LobLetterLayoutSettings>) {
-    setSaveError(null);
-    setSettings((prev) =>
-      prev ? { ...prev, letterLayout: { ...prev.letterLayout, ...patch } } : prev,
     );
   }
 
@@ -530,9 +521,9 @@ export default function LobSettingsPage() {
             </div>
 
             <div className="mt-6 border-t border-[#E8E4DC] pt-5">
-              <h3 className="text-sm font-semibold text-[#2E2A24]">Cover letter copy</h3>
+              <h3 className="text-sm font-semibold text-[#2E2A24]">Cover letter format</h3>
               <p className="mt-1 text-sm text-[#5C564D]">
-                Double-sided letters use page 1 for the intro (address window) and page 2 for the first two postcards.
+                Page 1 shows the recipient&apos;s snail, thank-you paragraph, and the first two postcards along the bottom.
               </p>
               <label className="mt-4 flex items-center gap-3 text-sm">
                 <input
@@ -557,13 +548,6 @@ export default function LobSettingsPage() {
                   {s.letterFormat.thankYouMessage.length}/2000 characters
                 </span>
               </label>
-
-              <LobLetterTemplateEditor
-                letterFormat={s.letterFormat}
-                letterLayout={s.letterLayout}
-                doubleSided={s.doubleSided}
-                onLetterLayoutChange={updateLetterLayout}
-              />
             </div>
           </section>
 

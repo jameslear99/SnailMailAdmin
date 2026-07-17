@@ -9,17 +9,9 @@ import {
   type LobLetterFormatSettings,
   validateLobLetterFormat,
 } from "@/lib/lob-letter-format";
-import {
-  DEFAULT_LOB_LETTER_LAYOUT,
-  parseLobLetterLayout,
-  type LobLetterLayoutSettings,
-  validateLobLetterLayout,
-} from "@/lib/lob-letter-template";
 
 export type { LobLetterFormatSettings } from "@/lib/lob-letter-format";
-export type { LobLetterLayoutSettings } from "@/lib/lob-letter-template";
 export { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
-export { DEFAULT_LOB_LETTER_LAYOUT } from "@/lib/lob-letter-template";
 
 export type LobProductType = "letter_us" | "letter_us_legal" | "postcard_4x6";
 
@@ -62,8 +54,6 @@ export type LobFulfillmentSettings = {
   returnAddress: LobReturnAddress;
   /** Cover page thank-you copy and recipient snail display. */
   letterFormat: LobLetterFormatSettings;
-  /** Spacing and sizing for Lob letter HTML template. */
-  letterLayout: LobLetterLayoutSettings;
 };
 
 export const DEFAULT_LOB_RETURN_ADDRESS: LobReturnAddress = {
@@ -93,7 +83,6 @@ export const DEFAULT_LOB_FULFILLMENT_SETTINGS: LobFulfillmentSettings = {
   addressPlacement: "top_first_page",
   returnAddress: { ...DEFAULT_LOB_RETURN_ADDRESS },
   letterFormat: { ...DEFAULT_LOB_LETTER_FORMAT },
-  letterLayout: { ...DEFAULT_LOB_LETTER_LAYOUT },
 };
 
 export const LOB_PRODUCT_LABELS: Record<LobProductType, string> = {
@@ -202,7 +191,6 @@ export function parseLobFulfillmentSettings(
     addressPlacement,
     returnAddress: parseReturnAddress(raw.returnAddress),
     letterFormat: parseLobLetterFormat(raw.letterFormat),
-    letterLayout: parseLobLetterLayout(raw.letterLayout),
   };
 }
 
@@ -217,9 +205,6 @@ export function validateLobFulfillmentSettings(settings: LobFulfillmentSettings)
 
   const letterErr = validateLobLetterFormat(settings.letterFormat);
   if (letterErr) return letterErr;
-
-  const layoutErr = validateLobLetterLayout(settings.letterLayout);
-  if (layoutErr) return layoutErr;
 
   if (settings.lobEnabled) {
     const addrErr = returnAddressValidationMessage(settings);
