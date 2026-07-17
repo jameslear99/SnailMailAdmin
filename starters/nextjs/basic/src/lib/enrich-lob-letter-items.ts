@@ -3,11 +3,7 @@ import "server-only";
 import type { Firestore } from "firebase-admin/firestore";
 
 import type { PrintQueueItem } from "@/lib/print-fulfillment";
-import {
-  findExistingSnailPreviewUrl,
-  resolveSnailPreviewUrl,
-  type SnailPreviewSize,
-} from "@/lib/render-snail-preview-server";
+import type { SnailPreviewSize } from "@/lib/render-snail-preview-server";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export type EnrichedPrintQueueItem = PrintQueueItem & {
@@ -20,6 +16,23 @@ export type LobLetterEnrichment = {
   recipientSnailImageUrl?: string;
 };
 
+type SnailPreviewModule = typeof import("@/lib/render-snail-preview-server");
+
+let cachedPreviewModule: SnailPreviewModule | null | undefined;
+
+/** Lazy-load sharp-backed preview code so Lob submit still works if native deps fail on cold start. */
+async function loadSnailPreviewModule(): Promise<SnailPreviewModule | null> {
+  if (cachedPreviewModule !== undefined) return cachedPreviewModule;
+  try {
+    cachedPreviewModule = await import("@/lib/render-snail-preview-server");
+    return cachedPreviewModule;
+  } catch (e) {
+    console.error("[lob-enrich] failed to load snail preview module", e);
+    cachedPreviewModule = null;
+    return null;
+  }
+}
+
 async function resolveSnailPreviewUrlWithFallbacks(
   db: Firestore,
   uid: string,
@@ -28,19 +41,22 @@ async function resolveSnailPreviewUrlWithFallbacks(
   const trimmed = uid.trim();
   if (!trimmed) return null;
 
+  const preview = await loadSnailPreviewModule();
+  if (!preview) return null;
+
   const sizes: SnailPreviewSize[] =
     preferredSize === "hero" ? ["hero", "badge"] : [preferredSize];
 
   for (const size of sizes) {
     try {
-      const url = await resolveSnailPreviewUrl(db, trimmed, size);
+      const url = await preview.resolveSnailPreviewUrl(db, trimmed, size);
       if (url) return url;
     } catch (e) {
       console.error(`[lob-enrich] snail preview render failed for ${trimmed} (${size})`, e);
     }
 
     try {
-      const cached = await findExistingSnailPreviewUrl(trimmed, size);
+      const cached = await preview.findExistingSnailPreviewUrl(trimmed, size);
       if (cached) return cached;
     } catch (e) {
       console.error(`[lob-enrich] snail preview cache lookup failed for ${trimmed} (${size})`, e);

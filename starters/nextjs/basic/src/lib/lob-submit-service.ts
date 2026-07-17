@@ -7,6 +7,7 @@ import {
   buildLobLetterHtml,
   chunkPostcardsForLobLetters,
   POSTCARDS_PER_LOB_LETTER_MAX,
+  type BuildLobLetterHtmlOptions,
 } from "@/lib/build-lob-letter-html";
 import { buildItemsFromDeliveryIds, buildQueueDetailForRecipient } from "@/lib/build-print-queue-detail";
 import { enrichItemsForLobLetter } from "@/lib/enrich-lob-letter-items";
@@ -109,6 +110,21 @@ function validateReturnAddress(settings: LobFulfillmentSettings): string | null 
   const fromResult = returnAddressToLobAddress(settings.returnAddress);
   if (!fromResult.ok) return `Return address invalid: ${fromResult.error}`;
   return null;
+}
+
+function letterHtmlOptions(
+  settings: LobFulfillmentSettings,
+  displayName: string,
+  recipientSnailImageUrl?: string,
+): BuildLobLetterHtmlOptions {
+  return {
+    recipientName: displayName,
+    recipientSnailImageUrl: settings.letterFormat.showRecipientSnailOnCover
+      ? recipientSnailImageUrl
+      : undefined,
+    thankYouMessage: settings.letterFormat.thankYouMessage,
+    doubleSided: settings.doubleSided,
+  };
 }
 
 type FailedJobContext = {
@@ -364,15 +380,56 @@ export async function submitLobJobsForRecipients(
 
         for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
           const chunk = chunks[chunkIndex]!;
-          const enrichment = await enrichItemsForLobLetter(db, chunk, uid);
-          const html = buildLobLetterHtml(enrichment.items, {
-            recipientName: displayName,
-            recipientSnailImageUrl: enrichment.recipientSnailImageUrl,
-            doubleSided: settings.doubleSided,
-          });
+          let enrichment;
+          let html;
+          let letterFile;
           const mailPostIds = [...new Set(chunk.map((i) => i.mailPostId))];
           const jobId = printJobIdForRecipient(uid, chunk.map((i) => i.deliveryId));
-          const letterFile = await resolveLobLetterFile(html, jobId);
+
+          try {
+            enrichment = await enrichItemsForLobLetter(db, chunk, uid);
+            html = buildLobLetterHtml(
+              enrichment.items,
+              letterHtmlOptions(settings, displayName, enrichment.recipientSnailImageUrl),
+            );
+            letterFile = await resolveLobLetterFile(html, jobId);
+          } catch (prepErr) {
+            const msg =
+              prepErr instanceof Error ? prepErr.message : "Failed to prepare Lob letter HTML";
+            await db.collection(PRINT_JOBS_COLLECTION).doc(jobId).set(
+              {
+                recipientUid: uid,
+                recipientDisplayName: displayName,
+                toName: lobTo.name,
+                toCity: lobTo.address_city,
+                toState: lobTo.address_state,
+                toZip: lobTo.address_zip,
+                productType: settings.productType,
+                deliveryIds: chunk.map((i) => i.deliveryId),
+                mailPostIds,
+                cardCount: chunk.length,
+                status: "failed",
+                trigger,
+                chunkIndex: chunkIndex + 1,
+                chunkTotal: chunks.length,
+                errorMessage: msg,
+                updatedAt: FieldValue.serverTimestamp(),
+                createdAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true },
+            );
+            localFailed += 1;
+            localResults.push({
+              recipientUid: uid,
+              jobId,
+              status: "failed",
+              reason: msg,
+              toName: lobTo.name,
+              toCity: lobTo.address_city,
+              cardCount: chunk.length,
+            });
+            continue;
+          }
 
           const jobRef = db.collection(PRINT_JOBS_COLLECTION).doc(jobId);
           const existing = await jobRef.get();
@@ -692,11 +749,10 @@ export async function resubmitPrintJob(
     const lobFrom = fromResult.address;
     const displayName = lobTo.name;
     const enrichment = await enrichItemsForLobLetter(db, items, recipientUid);
-    const html = buildLobLetterHtml(enrichment.items, {
-      recipientName: displayName,
-      recipientSnailImageUrl: enrichment.recipientSnailImageUrl,
-      doubleSided: settings.doubleSided,
-    });
+    const html = buildLobLetterHtml(
+      enrichment.items,
+      letterHtmlOptions(settings, displayName, enrichment.recipientSnailImageUrl),
+    );
 
     const resubmitSeq = (typeof parent.resubmitCount === "number" ? parent.resubmitCount : 0) + 1;
     const newJobId = printJobResubmitId(parentId, resubmitSeq);

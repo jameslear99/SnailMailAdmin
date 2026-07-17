@@ -7,10 +7,12 @@ import { LobCredentialsSection } from "@/components/printing/lob-credentials-sec
 import { apiFetch, apiJson } from "@/lib/api-fetch";
 import {
   DEFAULT_LOB_FULFILLMENT_SETTINGS,
+  DEFAULT_LOB_THANK_YOU_MESSAGE,
   LOB_PRODUCT_LABELS,
   missingReturnAddressFields,
   returnAddressValidationMessage,
   type LobFulfillmentSettings,
+  type LobLetterFormatSettings,
   type LobProductType,
   type ReturnAddressRequiredField,
 } from "@/lib/lob-fulfillment-settings";
@@ -87,6 +89,13 @@ export default function LobSettingsPage() {
     setSaveError(null);
     setSettings((prev) =>
       prev ? { ...prev, returnAddress: { ...prev.returnAddress, ...patch } } : prev,
+    );
+  }
+
+  function updateLetterFormat(patch: Partial<LobLetterFormatSettings>) {
+    setSaveError(null);
+    setSettings((prev) =>
+      prev ? { ...prev, letterFormat: { ...prev.letterFormat, ...patch } } : prev,
     );
   }
 
@@ -459,6 +468,9 @@ export default function LobSettingsPage() {
 
           <section className="rounded-xl border border-[#C8D5B9]/60 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-medium text-[#2E2A24]">Letter options</h2>
+            <p className="mt-1 text-sm text-[#5C564D]">
+              Lob print settings and cover-page letter format. Saved with your other Lob settings.
+            </p>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <label className="flex items-center gap-3 text-sm">
                 <input
@@ -505,6 +517,36 @@ export default function LobSettingsPage() {
                   <option value="top_first_page">Top of first page</option>
                   <option value="insert_blank_page">Insert blank page</option>
                 </select>
+              </label>
+            </div>
+
+            <div className="mt-6 border-t border-[#E8E4DC] pt-5">
+              <h3 className="text-sm font-semibold text-[#2E2A24]">Cover letter format</h3>
+              <p className="mt-1 text-sm text-[#5C564D]">
+                Page 1 shows the recipient&apos;s snail above your thank-you paragraph, then postcards below.
+              </p>
+              <label className="mt-4 flex items-center gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={s.letterFormat.showRecipientSnailOnCover}
+                  onChange={(e) => updateLetterFormat({ showRecipientSnailOnCover: e.target.checked })}
+                  className="h-4 w-4 rounded border-[#C8D5B9] accent-[#4F6E43]"
+                />
+                Show recipient snail on cover
+              </label>
+              <label className="mt-4 block text-sm">
+                <span className="font-medium text-[#2E2A24]">Thank-you paragraph</span>
+                <textarea
+                  value={s.letterFormat.thankYouMessage}
+                  onChange={(e) => updateLetterFormat({ thankYouMessage: e.target.value })}
+                  rows={5}
+                  maxLength={2000}
+                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2 text-sm leading-relaxed"
+                  placeholder={DEFAULT_LOB_THANK_YOU_MESSAGE}
+                />
+                <span className="mt-1 block text-xs text-[#5C564D]">
+                  {s.letterFormat.thankYouMessage.length}/2000 characters
+                </span>
               </label>
             </div>
           </section>
