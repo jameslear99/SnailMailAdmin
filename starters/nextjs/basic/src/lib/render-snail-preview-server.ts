@@ -23,9 +23,13 @@ import {
   tintForLayerFromColors,
   type PreviewSlotColors,
 } from "@/lib/snail-preview-tint";
+import {
+  findCachedSnailPreviewUrl,
+  type SnailPreviewSize,
+} from "@/lib/snail-preview-cache";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
-export type SnailPreviewSize = "badge" | "hero";
+export type { SnailPreviewSize } from "@/lib/snail-preview-cache";
 
 const OUTPUT_PX: Record<SnailPreviewSize, number> = {
   badge: 256,
@@ -118,22 +122,12 @@ async function downloadUrlForCachedFile(
   return null;
 }
 
-/** Reuse any cached preview PNG for this user + size (even if look fingerprint changed). */
+/** @deprecated Use findCachedSnailPreviewUrl from `@/lib/snail-preview-cache`. */
 export async function findExistingSnailPreviewUrl(
   uid: string,
   size: SnailPreviewSize,
 ): Promise<string | null> {
-  const trimmed = uid.trim();
-  if (!trimmed) return null;
-
-  const bucket = getAdminBucket();
-  const [files] = await bucket.getFiles({
-    prefix: `snail-previews/${trimmed}/${size}-`,
-    maxResults: 1,
-  });
-  const match = files[0];
-  if (!match) return null;
-  return downloadUrlForCachedFile(bucket, match.name);
+  return findCachedSnailPreviewUrl(uid, size);
 }
 
 async function compositeSnailPng(
@@ -207,15 +201,12 @@ function storagePathFor(uid: string, size: SnailPreviewSize, fingerprint: string
   return `snail-previews/${uid}/${size}-${hash}.png`;
 }
 
-/**
- * Returns a public HTTPS URL for a user's composited snail artwork.
- * Renders and caches in Firebase Storage when needed.
- */
-export async function resolveSnailPreviewUrl(
+/** Composited PNG bytes — renders and caches in Storage when needed. */
+export async function resolveSnailPreviewPng(
   db: Firestore,
   uid: string,
   size: SnailPreviewSize,
-): Promise<string | null> {
+): Promise<Buffer | null> {
   const trimmed = uid.trim();
   if (!trimmed) return null;
 
@@ -226,12 +217,16 @@ export async function resolveSnailPreviewUrl(
   const fingerprint = snailLookFingerprint(look);
   const bucket = getAdminBucket();
   const objectPath = storagePathFor(trimmed, size, fingerprint);
-  const cachedUrl = await downloadUrlForCachedFile(bucket, objectPath);
-  if (cachedUrl) return cachedUrl;
+  const file = bucket.file(objectPath);
+  const [exists] = await file.exists();
+  if (exists) {
+    const [buf] = await file.download();
+    return buf;
+  }
 
   const png = await compositeSnailPng(db, look, size);
   const downloadToken = newFirebaseStorageDownloadToken();
-  await bucket.file(objectPath).save(png, {
+  await file.save(png, {
     metadata: {
       contentType: "image/png",
       cacheControl: "public, max-age=31536000, immutable",
@@ -243,5 +238,26 @@ export async function resolveSnailPreviewUrl(
     },
   });
 
-  return firebaseStorageDownloadUrl(bucket.name, objectPath, downloadToken);
+  return png;
+}
+
+/**
+ * Returns a public HTTPS URL for a user's composited snail artwork.
+ * Renders and caches in Firebase Storage when needed.
+ */
+export async function resolveSnailPreviewUrl(
+  db: Firestore,
+  uid: string,
+  size: SnailPreviewSize,
+): Promise<string | null> {
+  const png = await resolveSnailPreviewPng(db, uid, size);
+  if (!png) return null;
+
+  const trimmed = uid.trim();
+  const profile = await loadProfileForUid(db, trimmed);
+  const look = parseSnailLookFromProfile(profile);
+  if (!look) return null;
+
+  const objectPath = storagePathFor(trimmed, size, snailLookFingerprint(look));
+  return downloadUrlForCachedFile(getAdminBucket(), objectPath);
 }
