@@ -141,6 +141,25 @@ export async function lobSecretConfigured(db: Firestore, environment: LobEnviron
   return key.length > 0;
 }
 
+/** Explains why encrypted Firestore Lob keys cannot be used in this runtime. */
+export async function lobSecretMisconfigurationReason(
+  db: Firestore,
+  environment: LobEnvironment,
+): Promise<string | null> {
+  if (await lobSecretConfigured(db, environment)) return null;
+
+  const stored = await loadStoredCredentials(db);
+  const enc = stored[storedFieldName(environment, "secretKey")];
+  if (typeof enc === "string" && enc.trim()) {
+    if (!credentialsEncryptionAvailable()) {
+      return `Lob ${environment} API key is stored encrypted in Firestore, but LOB_CREDENTIALS_ENCRYPTION_KEY is not set on this server. Add the same encryption key to App Hosting secrets, or set LOB_API_KEY_${environment === "live" ? "LIVE" : "TEST"} in the hosting environment.`;
+    }
+    return `Lob ${environment} API key is stored encrypted in Firestore but could not be decrypted. Ensure LOB_CREDENTIALS_ENCRYPTION_KEY on this server matches the value used when the key was saved in Admin settings.`;
+  }
+
+  return `LOB API key not configured for ${environment} mode. Add keys in Printing → Settings → Lob credentials.`;
+}
+
 function trimOrUndef(v: unknown): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
