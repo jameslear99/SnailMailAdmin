@@ -19,6 +19,12 @@ env:
     availability:
       - RUNTIME
 
+  # Decrypts Lob API keys stored in Firestore (adminSecrets/lobApiCredentials)
+  - variable: LOB_CREDENTIALS_ENCRYPTION_KEY
+    secret: LOB_CREDENTIALS_ENCRYPTION_KEY
+    availability:
+      - RUNTIME
+
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: AIzaSyD2z_pZjWM_BudS92n3gR7cLpaKfVA_7U8
     availability:
