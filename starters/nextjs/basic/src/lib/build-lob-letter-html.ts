@@ -6,6 +6,7 @@
  */
 
 import type { EnrichedPrintQueueItem } from "@/lib/enrich-lob-letter-items";
+import { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
 import { formatSentOnDate } from "@/lib/postcard-print-utils";
 
 /** Posts on the cover page (bottom row only). */
@@ -27,9 +28,8 @@ export function postcardsPerLobLetter(_doubleSided?: boolean): number {
   return POSTCARDS_PER_LOB_LETTER_MAX;
 }
 
-/** Edit this copy for the cover-page thank-you paragraph in Lob letters. */
-export const THANK_YOU_MESSAGE =
-  "Thank you for supporting Snail Mail! Your belief in slow, thoughtful postcards means more than we can say — your support is greatly appreciated, and we're so glad you're part of this community.";
+/** @deprecated Import from `@/lib/lob-letter-format` — kept for existing imports. */
+export const THANK_YOU_MESSAGE = DEFAULT_LOB_THANK_YOU_MESSAGE;
 
 const SNAIL_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="56" height="56" aria-hidden="true"><ellipse cx="16" cy="20" rx="11" ry="8" fill="#8B9E7A"/><circle cx="16" cy="12" r="6" fill="#6E8B5E"/><circle cx="14" cy="11" r="1.2" fill="#2E2A24"/><path d="M20 10c2 1 3 3 3 5" stroke="#5C564D" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
 
@@ -177,7 +177,7 @@ export function paginatePostcardsForLetter(items: EnrichedPrintQueueItem[]): Let
   return pages;
 }
 
-function renderCoverIntro(recipientSnailImageUrl?: string): string {
+function renderCoverIntro(recipientSnailImageUrl: string | undefined, thankYouMessage: string): string {
   const snailBlock = recipientSnailImageUrl?.trim()
     ? `<div class="cover-intro-snail-wrap">
         <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" />
@@ -187,17 +187,22 @@ function renderCoverIntro(recipientSnailImageUrl?: string): string {
   return `
     <div class="cover-intro">
       ${snailBlock}
-      <p class="thanks">${escapeHtml(THANK_YOU_MESSAGE)}</p>
+      <p class="thanks">${escapeHtml(thankYouMessage)}</p>
     </div>
   `;
 }
 
-function renderPage(page: LetterPage, recipientSnailImageUrl?: string): string {
+type RenderPageOptions = {
+  recipientSnailImageUrl?: string;
+  thankYouMessage: string;
+};
+
+function renderPage(page: LetterPage, pageOpts: RenderPageOptions): string {
   if (page.kind === "cover") {
     const [left, right] = page.slots;
     return `
       <div class="sheet sheet--cover">
-        ${renderCoverIntro(recipientSnailImageUrl)}
+        ${renderCoverIntro(pageOpts.recipientSnailImageUrl, pageOpts.thankYouMessage)}
         <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
           <tr>
             ${renderPostCell(left)}
@@ -228,6 +233,7 @@ function renderPage(page: LetterPage, recipientSnailImageUrl?: string): string {
 export type BuildLobLetterHtmlOptions = {
   recipientName?: string;
   recipientSnailImageUrl?: string;
+  thankYouMessage?: string;
   doubleSided?: boolean;
 };
 
@@ -238,9 +244,17 @@ export function buildLobLetterHtml(
 ): string {
   const opts: BuildLobLetterHtmlOptions =
     typeof options === "string" ? { recipientName: options } : (options ?? {});
+  const thankYouMessage = opts.thankYouMessage?.trim() || DEFAULT_LOB_THANK_YOU_MESSAGE;
   const packed = items.slice(0, POSTCARDS_PER_LOB_LETTER_MAX);
   const pages = paginatePostcardsForLetter(packed);
-  const body = pages.map((p) => renderPage(p, opts.recipientSnailImageUrl)).join("\n");
+  const body = pages
+    .map((p) =>
+      renderPage(p, {
+        recipientSnailImageUrl: opts.recipientSnailImageUrl,
+        thankYouMessage,
+      }),
+    )
+    .join("\n");
 
   return `<!DOCTYPE html>
 <html>

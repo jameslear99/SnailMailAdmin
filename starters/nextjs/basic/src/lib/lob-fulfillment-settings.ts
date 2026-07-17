@@ -3,6 +3,16 @@
  * Stored in Firestore under `adminSettings/lobFulfillment`.
  */
 
+import {
+  DEFAULT_LOB_LETTER_FORMAT,
+  parseLobLetterFormat,
+  type LobLetterFormatSettings,
+  validateLobLetterFormat,
+} from "@/lib/lob-letter-format";
+
+export type { LobLetterFormatSettings } from "@/lib/lob-letter-format";
+export { DEFAULT_LOB_THANK_YOU_MESSAGE } from "@/lib/lob-letter-format";
+
 export type LobProductType = "letter_us" | "letter_us_legal" | "postcard_4x6";
 
 export type LobAutoSendMode = "disabled" | "immediate" | "scheduled_batch";
@@ -42,6 +52,8 @@ export type LobFulfillmentSettings = {
   mailType: LobMailType;
   addressPlacement: LobAddressPlacement;
   returnAddress: LobReturnAddress;
+  /** Cover page thank-you copy and recipient snail display. */
+  letterFormat: LobLetterFormatSettings;
 };
 
 export const DEFAULT_LOB_RETURN_ADDRESS: LobReturnAddress = {
@@ -70,6 +82,7 @@ export const DEFAULT_LOB_FULFILLMENT_SETTINGS: LobFulfillmentSettings = {
   mailType: "usps_first_class",
   addressPlacement: "top_first_page",
   returnAddress: { ...DEFAULT_LOB_RETURN_ADDRESS },
+  letterFormat: { ...DEFAULT_LOB_LETTER_FORMAT },
 };
 
 export const LOB_PRODUCT_LABELS: Record<LobProductType, string> = {
@@ -177,6 +190,7 @@ export function parseLobFulfillmentSettings(
     mailType,
     addressPlacement,
     returnAddress: parseReturnAddress(raw.returnAddress),
+    letterFormat: parseLobLetterFormat(raw.letterFormat),
   };
 }
 
@@ -188,6 +202,9 @@ export function validateLobFulfillmentSettings(settings: LobFulfillmentSettings)
   if (settings.submitConcurrency < 1 || settings.submitConcurrency > 10) {
     return "submitConcurrency must be between 1 and 10";
   }
+
+  const letterErr = validateLobLetterFormat(settings.letterFormat);
+  if (letterErr) return letterErr;
 
   if (settings.lobEnabled) {
     const addrErr = returnAddressValidationMessage(settings);
