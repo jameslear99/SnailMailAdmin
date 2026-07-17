@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "crypto";
 import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import {
@@ -110,6 +111,121 @@ function validateReturnAddress(settings: LobFulfillmentSettings): string | null 
   return null;
 }
 
+type FailedJobContext = {
+  toName?: string;
+  toCity?: string;
+  cardCount?: number;
+};
+
+/** Persist a failed print job so Admin → Print jobs shows configuration/submit errors. */
+async function recordRecipientSubmitFailure(
+  db: Firestore,
+  settings: LobFulfillmentSettings,
+  recipientUid: string,
+  trigger: PrintJobTrigger,
+  reason: string,
+  postCache?: Map<string, Record<string, unknown> | null>,
+): Promise<{ jobId: string } & FailedJobContext> {
+  const uid = recipientUid.trim();
+  let deliveryIds: string[] = [];
+  let mailPostIds: string[] = [];
+  let cardCount = 0;
+  let toName: string | undefined;
+  let toCity: string | undefined;
+  let displayName: string | undefined;
+
+  try {
+    const payload = await buildQueueDetailForRecipient(
+      db,
+      uid,
+      postCache ?? new Map(),
+      { scope: "awaiting_print" },
+    );
+    const eligible = payload.items.filter((item) => (item.deliveryStatus ?? "") === "awaiting_print");
+    deliveryIds = eligible.map((i) => i.deliveryId);
+    mailPostIds = [...new Set(eligible.map((i) => i.mailPostId))];
+    cardCount = eligible.length;
+    const toResult = userDocToLobAddress(payload.user);
+    if (toResult.ok) {
+      toName = toResult.address.name;
+      toCity = toResult.address.address_city;
+      displayName = toResult.address.name;
+    }
+  } catch {
+    // Still write a failed job even if queue lookup fails.
+  }
+
+  const jobId =
+    deliveryIds.length > 0
+      ? printJobIdForRecipient(uid, deliveryIds)
+      : `lob_${uid.slice(0, 40)}_err_${createHash("sha256").update(reason).digest("hex").slice(0, 16)}`;
+
+  const jobRef = db.collection(PRINT_JOBS_COLLECTION).doc(jobId);
+  const existing = await jobRef.get();
+  const prior = existing.data();
+  const priorRetryCount = typeof prior?.retryCount === "number" ? prior.retryCount : 0;
+  const retryCount = prior?.status === "failed" ? priorRetryCount + 1 : priorRetryCount;
+
+  await jobRef.set(
+    {
+      recipientUid: uid,
+      recipientDisplayName: displayName ?? null,
+      toName: toName ?? null,
+      toCity: toCity ?? null,
+      toState: null,
+      toZip: null,
+      productType: settings.productType,
+      deliveryIds,
+      mailPostIds,
+      cardCount,
+      status: "failed",
+      trigger,
+      retryCount,
+      errorMessage: reason,
+      updatedAt: FieldValue.serverTimestamp(),
+      createdAt: existing.exists
+        ? (prior?.createdAt ?? FieldValue.serverTimestamp())
+        : FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  return { jobId, toName, toCity, cardCount: cardCount || undefined };
+}
+
+async function recordBatchSubmitFailures(
+  db: Firestore,
+  settings: LobFulfillmentSettings,
+  recipientUids: string[],
+  trigger: PrintJobTrigger,
+  reason: string,
+): Promise<SubmitRecipientResult[]> {
+  const postCache = new Map<string, Record<string, unknown> | null>();
+  const results: SubmitRecipientResult[] = [];
+
+  for (const recipientUid of recipientUids) {
+    const recorded = await recordRecipientSubmitFailure(
+      db,
+      settings,
+      recipientUid,
+      trigger,
+      reason,
+      postCache,
+    );
+    results.push({
+      recipientUid,
+      jobId: recorded.jobId,
+      status: "failed",
+      reason,
+      toName: recorded.toName,
+      toCity: recorded.toCity,
+      cardCount: recorded.cardCount,
+    });
+  }
+
+  return results;
+}
+
 export async function submitLobJobsForRecipients(
   db: Firestore,
   settings: LobFulfillmentSettings,
@@ -138,29 +254,23 @@ export async function submitLobJobsForRecipients(
     const reason =
       (await lobSecretMisconfigurationReason(db, settings.lobEnvironment)) ??
       `LOB API key not configured for ${settings.lobEnvironment} mode`;
+    const results = await recordBatchSubmitFailures(db, settings, uniqueUids, trigger, reason);
     return {
       submitted: 0,
       skipped: 0,
       failed: uniqueUids.length,
-      results: uniqueUids.map((recipientUid) => ({
-        recipientUid,
-        status: "failed",
-        reason,
-      })),
+      results,
     };
   }
 
   const returnErr = validateReturnAddress(settings);
   if (returnErr) {
+    const results = await recordBatchSubmitFailures(db, settings, uniqueUids, trigger, returnErr);
     return {
       submitted: 0,
       skipped: 0,
       failed: uniqueUids.length,
-      results: uniqueUids.map((recipientUid) => ({
-        recipientUid,
-        status: "failed",
-        reason: returnErr,
-      })),
+      results,
     };
   }
 
@@ -227,11 +337,23 @@ export async function submitLobJobsForRecipients(
 
         const toResult = userDocToLobAddress(payload.user);
         if (!toResult.ok) {
+          const recorded = await recordRecipientSubmitFailure(
+            db,
+            settings,
+            uid,
+            trigger,
+            toResult.error,
+            postCache,
+          );
           localFailed += 1;
           localResults.push({
             recipientUid: uid,
+            jobId: recorded.jobId,
             status: "failed",
             reason: toResult.error,
+            toName: recorded.toName,
+            toCity: recorded.toCity,
+            cardCount: recorded.cardCount,
           });
           return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
         }
@@ -400,9 +522,18 @@ export async function submitLobJobsForRecipients(
           });
         }
       } catch (e) {
-        localFailed += 1;
         const msg = e instanceof Error ? e.message : "Submit failed";
-        localResults.push({ recipientUid: uid, status: "failed", reason: msg });
+        const recorded = await recordRecipientSubmitFailure(db, settings, uid, trigger, msg, postCache);
+        localFailed += 1;
+        localResults.push({
+          recipientUid: uid,
+          jobId: recorded.jobId,
+          status: "failed",
+          reason: msg,
+          toName: recorded.toName,
+          toCity: recorded.toCity,
+          cardCount: recorded.cardCount,
+        });
       }
 
       return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
@@ -453,6 +584,18 @@ export async function resubmitPrintJob(
       skipped: 0,
       failed: 1,
       results: [{ recipientUid: "", status: "failed", reason: returnErr }],
+    };
+  }
+
+  if (!(await lobConfigured(db, settings.lobEnvironment))) {
+    const reason =
+      (await lobSecretMisconfigurationReason(db, settings.lobEnvironment)) ??
+      `LOB API key not configured for ${settings.lobEnvironment} mode`;
+    return {
+      submitted: 0,
+      skipped: 0,
+      failed: 1,
+      results: [{ recipientUid: "", status: "failed", reason }],
     };
   }
 
