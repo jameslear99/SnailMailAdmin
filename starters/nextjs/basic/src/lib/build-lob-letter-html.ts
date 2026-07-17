@@ -1,7 +1,7 @@
 /**
  * HTML for Lob US-letter jobs.
  *
- * Page 1: thank-you copy beside recipient snail artwork, two posts at the bottom.
+ * Page 1: recipient snail above thank-you copy, two posts at the bottom.
  * Page 2+: four posts per page in a 2×2 grid.
  */
 
@@ -27,7 +27,8 @@ export function postcardsPerLobLetter(_doubleSided?: boolean): number {
   return POSTCARDS_PER_LOB_LETTER_MAX;
 }
 
-const THANK_YOU_MESSAGE =
+/** Edit this copy for the cover-page thank-you paragraph in Lob letters. */
+export const THANK_YOU_MESSAGE =
   "Thank you for supporting Snail Mail! Your belief in slow, thoughtful postcards means more than we can say — your support is greatly appreciated, and we're so glad you're part of this community.";
 
 const SNAIL_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="56" height="56" aria-hidden="true"><ellipse cx="16" cy="20" rx="11" ry="8" fill="#8B9E7A"/><circle cx="16" cy="12" r="6" fill="#6E8B5E"/><circle cx="14" cy="11" r="1.2" fill="#2E2A24"/><path d="M20 10c2 1 3 3 3 5" stroke="#5C564D" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
@@ -177,21 +178,17 @@ export function paginatePostcardsForLetter(items: EnrichedPrintQueueItem[]): Let
 }
 
 function renderCoverIntro(recipientSnailImageUrl?: string): string {
-  const snailCell = recipientSnailImageUrl?.trim()
-    ? `<td class="cover-intro-snail" valign="middle">
+  const snailBlock = recipientSnailImageUrl?.trim()
+    ? `<div class="cover-intro-snail-wrap">
         <img class="cover-snail" src="${escapeHtml(recipientSnailImageUrl.trim())}" alt="" />
-      </td>`
-    : `<td class="cover-intro-snail cover-intro-snail--empty" valign="middle">&nbsp;</td>`;
+      </div>`
+    : "";
 
   return `
-    <table class="cover-intro" cellpadding="0" cellspacing="0" width="100%">
-      <tr>
-        ${snailCell}
-        <td class="cover-intro-thanks" valign="middle">
-          <p class="thanks">${escapeHtml(THANK_YOU_MESSAGE)}</p>
-        </td>
-      </tr>
-    </table>
+    <div class="cover-intro">
+      ${snailBlock}
+      <p class="thanks">${escapeHtml(THANK_YOU_MESSAGE)}</p>
+    </div>
   `;
 }
 
@@ -270,25 +267,17 @@ export function buildLobLetterHtml(
     }
     .cover-intro {
       width: 100%;
-      table-layout: fixed;
-      margin-bottom: 0.1in;
+      padding: 0 0.55in 0.2in;
+      box-sizing: border-box;
     }
-    .cover-intro-snail {
-      width: 38%;
-      vertical-align: middle;
-      padding: 0.12in 0.1in 0.12in 0.22in;
-    }
-    .cover-intro-snail--empty {
-      width: 0;
-      padding: 0;
-    }
-    .cover-intro-thanks {
-      vertical-align: middle;
-      padding: 0.14in 0.22in 0.14in 0.08in;
+    .cover-intro-snail-wrap {
+      text-align: center;
+      margin: 0 0 0.16in;
+      line-height: 0;
     }
     .thanks {
       margin: 0;
-      padding: 0;
+      padding: 0 0.12in;
       font-size: 10.5pt;
       line-height: 1.45;
       text-align: left;
@@ -298,7 +287,7 @@ export function buildLobLetterHtml(
       height: 2.2in;
       width: auto;
       max-width: 2.8in;
-      display: block;
+      display: inline-block;
     }
     .quad-table {
       width: 100%;

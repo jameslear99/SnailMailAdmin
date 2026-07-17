@@ -77,17 +77,63 @@ async function loadProfileForUid(
   db: Firestore,
   uid: string,
 ): Promise<Record<string, unknown> | null> {
-  const pub = await db.collection("publicProfiles").doc(uid).get();
-  if (pub.exists) return serializeDoc(pub.data())!;
+  const [pubSnap, userSnap] = await Promise.all([
+    db.collection("publicProfiles").doc(uid).get(),
+    db.collection("users").doc(uid).get(),
+  ]);
 
-  const user = await db.collection("users").doc(uid).get();
-  if (!user.exists) return null;
-  const data = serializeDoc(user.data())!;
-  const snail = data.snail;
-  if (snail && typeof snail === "object") {
-    return { snail };
+  const pubData = pubSnap.exists ? serializeDoc(pubSnap.data())! : null;
+  const userData = userSnap.exists ? serializeDoc(userSnap.data())! : null;
+
+  if (pubData && parseSnailLookFromProfile(pubData)) {
+    return pubData;
+  }
+
+  if (userData?.snail && typeof userData.snail === "object") {
+    return {
+      ...(pubData ?? {}),
+      uid,
+      snail: userData.snail,
+    };
+  }
+
+  return pubData ?? userData;
+}
+
+async function downloadUrlForCachedFile(
+  bucket: ReturnType<typeof getAdminBucket>,
+  objectPath: string,
+): Promise<string | null> {
+  const file = bucket.file(objectPath);
+  const [exists] = await file.exists();
+  if (!exists) return null;
+
+  const [meta] = await file.getMetadata();
+  const token =
+    meta.metadata?.firebaseStorageDownloadTokens ??
+    meta.metadata?.["firebaseStorageDownloadTokens"];
+  if (typeof token === "string" && token.trim()) {
+    return firebaseStorageDownloadUrl(bucket.name, objectPath, token.trim());
   }
   return null;
+}
+
+/** Reuse any cached preview PNG for this user + size (even if look fingerprint changed). */
+export async function findExistingSnailPreviewUrl(
+  uid: string,
+  size: SnailPreviewSize,
+): Promise<string | null> {
+  const trimmed = uid.trim();
+  if (!trimmed) return null;
+
+  const bucket = getAdminBucket();
+  const [files] = await bucket.getFiles({
+    prefix: `snail-previews/${trimmed}/${size}-`,
+    maxResults: 1,
+  });
+  const match = files[0];
+  if (!match) return null;
+  return downloadUrlForCachedFile(bucket, match.name);
 }
 
 async function compositeSnailPng(
@@ -180,21 +226,12 @@ export async function resolveSnailPreviewUrl(
   const fingerprint = snailLookFingerprint(look);
   const bucket = getAdminBucket();
   const objectPath = storagePathFor(trimmed, size, fingerprint);
-  const file = bucket.file(objectPath);
-  const [exists] = await file.exists();
-  if (exists) {
-    const [meta] = await file.getMetadata();
-    const token =
-      meta.metadata?.firebaseStorageDownloadTokens ??
-      meta.metadata?.["firebaseStorageDownloadTokens"];
-    if (typeof token === "string" && token.trim()) {
-      return firebaseStorageDownloadUrl(bucket.name, objectPath, token.trim());
-    }
-  }
+  const cachedUrl = await downloadUrlForCachedFile(bucket, objectPath);
+  if (cachedUrl) return cachedUrl;
 
   const png = await compositeSnailPng(db, look, size);
   const downloadToken = newFirebaseStorageDownloadToken();
-  await file.save(png, {
+  await bucket.file(objectPath).save(png, {
     metadata: {
       contentType: "image/png",
       cacheControl: "public, max-age=31536000, immutable",

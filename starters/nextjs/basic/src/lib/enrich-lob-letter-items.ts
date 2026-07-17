@@ -3,6 +3,11 @@ import "server-only";
 import type { Firestore } from "firebase-admin/firestore";
 
 import type { PrintQueueItem } from "@/lib/print-fulfillment";
+import {
+  findExistingSnailPreviewUrl,
+  resolveSnailPreviewUrl,
+  type SnailPreviewSize,
+} from "@/lib/render-snail-preview-server";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 export type EnrichedPrintQueueItem = PrintQueueItem & {
@@ -15,18 +20,34 @@ export type LobLetterEnrichment = {
   recipientSnailImageUrl?: string;
 };
 
-async function safeSnailPreviewUrl(
+async function resolveSnailPreviewUrlWithFallbacks(
   db: Firestore,
   uid: string,
-  size: "badge" | "hero",
+  preferredSize: SnailPreviewSize,
 ): Promise<string | null> {
-  try {
-    const { resolveSnailPreviewUrl } = await import("@/lib/render-snail-preview-server");
-    return await resolveSnailPreviewUrl(db, uid, size);
-  } catch (e) {
-    console.error(`[lob-enrich] snail preview failed for ${uid} (${size})`, e);
-    return null;
+  const trimmed = uid.trim();
+  if (!trimmed) return null;
+
+  const sizes: SnailPreviewSize[] =
+    preferredSize === "hero" ? ["hero", "badge"] : [preferredSize];
+
+  for (const size of sizes) {
+    try {
+      const url = await resolveSnailPreviewUrl(db, trimmed, size);
+      if (url) return url;
+    } catch (e) {
+      console.error(`[lob-enrich] snail preview render failed for ${trimmed} (${size})`, e);
+    }
+
+    try {
+      const cached = await findExistingSnailPreviewUrl(trimmed, size);
+      if (cached) return cached;
+    } catch (e) {
+      console.error(`[lob-enrich] snail preview cache lookup failed for ${trimmed} (${size})`, e);
+    }
   }
+
+  return null;
 }
 
 async function loadUsername(db: Firestore, uid: string): Promise<string | undefined> {
@@ -72,19 +93,17 @@ export async function enrichItemsForLobLetter(
   const usernameByUid = new Map<string, string>();
   const snailBadgeByUid = new Map<string, string>();
 
-  await Promise.all(
-    [...senderUids].map(async (uid) => {
-      const [username, snailUrl] = await Promise.all([
-        loadUsername(db, uid),
-        safeSnailPreviewUrl(db, uid, "badge"),
-      ]);
-      if (username) usernameByUid.set(uid, username);
-      if (snailUrl) snailBadgeByUid.set(uid, snailUrl);
-    }),
-  );
+  for (const uid of senderUids) {
+    const [username, snailUrl] = await Promise.all([
+      loadUsername(db, uid),
+      resolveSnailPreviewUrlWithFallbacks(db, uid, "badge"),
+    ]);
+    if (username) usernameByUid.set(uid, username);
+    if (snailUrl) snailBadgeByUid.set(uid, snailUrl);
+  }
 
   const recipientSnailImageUrl =
-    (await safeSnailPreviewUrl(db, recipientUid.trim(), "hero")) ?? undefined;
+    (await resolveSnailPreviewUrlWithFallbacks(db, recipientUid.trim(), "hero")) ?? undefined;
 
   const enriched: EnrichedPrintQueueItem[] = items.map((item) => {
     const senderUid = senderUidFromItem(item);

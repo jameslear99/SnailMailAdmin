@@ -51,9 +51,23 @@ export function parseSnailLookFromProfile(
 
   const snailMap = snail as Record<string, unknown>;
   const lookRaw = snailMap.look;
-  if (!lookRaw || typeof lookRaw !== "object" || Array.isArray(lookRaw)) return null;
+  if (lookRaw && typeof lookRaw === "object" && !Array.isArray(lookRaw)) {
+    const parsed = parseSnailLookRecord(lookRaw as Record<string, unknown>);
+    if (parsed) return parsed;
+  }
 
-  const look = lookRaw as Record<string, unknown>;
+  const appearanceRaw = snailMap.appearance;
+  if (appearanceRaw && typeof appearanceRaw === "object" && !Array.isArray(appearanceRaw)) {
+    return parseSnailLookFromLegacyAppearance(
+      appearanceRaw as Record<string, unknown>,
+      snailMap.equippedAccessoryId,
+    );
+  }
+
+  return null;
+}
+
+function parseSnailLookRecord(look: Record<string, unknown>): ParsedSnailLook | null {
   const antennaAssetId = typeof look.antennaAssetId === "string" ? look.antennaAssetId.trim() : "";
   const bodyAssetId = typeof look.bodyAssetId === "string" ? look.bodyAssetId.trim() : "";
   const shellAssetId = typeof look.shellAssetId === "string" ? look.shellAssetId.trim() : "";
@@ -74,6 +88,39 @@ export function parseSnailLookFromProfile(
     antennaColor: flutterColorToHex(Number(look.antennaColor) || 0xff6e8b5e),
     bodyColor: flutterColorToHex(Number(look.bodyColor) || 0xff6e8b5e),
     shellColor: flutterColorToHex(Number(look.shellColor) || 0xff8b9e7a),
+  };
+}
+
+/** Legacy `snail.appearance` rows without catalog asset ids cannot be composited. */
+function parseSnailLookFromLegacyAppearance(
+  appearance: Record<string, unknown>,
+  equippedAccessoryId: unknown,
+): ParsedSnailLook | null {
+  const antennaAssetId =
+    typeof appearance.antennaAssetId === "string" ? appearance.antennaAssetId.trim() : "";
+  const bodyAssetId = typeof appearance.bodyAssetId === "string" ? appearance.bodyAssetId.trim() : "";
+  const shellAssetId = typeof appearance.shellAssetId === "string" ? appearance.shellAssetId.trim() : "";
+  const faceAssetId = typeof appearance.faceAssetId === "string" ? appearance.faceAssetId.trim() : "";
+
+  if (!antennaAssetId || !bodyAssetId || !shellAssetId || !faceAssetId) return null;
+
+  const accessoryRaw =
+    typeof equippedAccessoryId === "string" && equippedAccessoryId.trim()
+      ? equippedAccessoryId
+      : appearance.accessoryAssetId;
+  const accessoryAssetId =
+    typeof accessoryRaw === "string" && accessoryRaw.trim() ? accessoryRaw.trim() : undefined;
+
+  const accent = Number(appearance.accent) || 0xff6e8b5e;
+  return {
+    antennaAssetId,
+    bodyAssetId,
+    shellAssetId,
+    faceAssetId,
+    accessoryAssetId,
+    antennaColor: flutterColorToHex(accent),
+    bodyColor: flutterColorToHex(Number(appearance.bodyColor) || 0xff6e8b5e),
+    shellColor: flutterColorToHex(Number(appearance.shellColor) || 0xff8b9e7a),
   };
 }
 
