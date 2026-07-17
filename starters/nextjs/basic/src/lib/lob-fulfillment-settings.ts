@@ -27,14 +27,16 @@ export type LobFulfillmentSettings = {
   lobEnvironment: "test" | "live";
   productType: LobProductType;
   autoSendMode: LobAutoSendMode;
-  /** How often the auto processor may run (scheduled_batch). */
+  /** Only used when autoSendMode is scheduled_batch — min minutes between auto-send runs. */
   batchIntervalMinutes: number;
-  /** Min queued cards on a recipient before auto batch includes them (1 = any). */
+  /** Min awaiting-print postcards per recipient before auto-send includes them (manual submit ignores this). */
   batchMinQueuedCards: number;
-  /** Min distinct recipients with eligible queue before a batch run fires (0 = no minimum). */
+  /** @deprecated Ignored — auto-send is per-recipient only. Kept for Firestore backward compatibility. */
   batchMinRecipients: number;
   /** Cap recipients submitted per auto run. */
   batchMaxRecipientsPerRun: number;
+  /** Parallel Lob submissions per processor run (rate-limit aware). */
+  submitConcurrency: number;
   color: boolean;
   doubleSided: boolean;
   mailType: LobMailType;
@@ -58,9 +60,11 @@ export const DEFAULT_LOB_FULFILLMENT_SETTINGS: LobFulfillmentSettings = {
   productType: "letter_us",
   autoSendMode: "disabled",
   batchIntervalMinutes: 60,
-  batchMinQueuedCards: 1,
+  /** One full US letter: 2 postcards on cover + 3×4 inside (see build-lob-letter-html). */
+  batchMinQueuedCards: 14,
   batchMinRecipients: 0,
   batchMaxRecipientsPerRun: 25,
+  submitConcurrency: 3,
   color: true,
   doubleSided: true,
   mailType: "usps_first_class",
@@ -147,8 +151,8 @@ export function parseLobFulfillmentSettings(
 
   const interval = Number(raw.batchIntervalMinutes);
   const minCards = Number(raw.batchMinQueuedCards);
-  const minRecipients = Number(raw.batchMinRecipients);
   const maxRecipients = Number(raw.batchMaxRecipientsPerRun);
+  const concurrency = Number(raw.submitConcurrency);
 
   return {
     lobEnabled: raw.lobEnabled === true,
@@ -159,14 +163,15 @@ export function parseLobFulfillmentSettings(
       Number.isFinite(interval) && interval >= 5 ? Math.floor(interval) : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchIntervalMinutes,
     batchMinQueuedCards:
       Number.isFinite(minCards) && minCards >= 1 ? Math.floor(minCards) : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchMinQueuedCards,
-    batchMinRecipients:
-      Number.isFinite(minRecipients) && minRecipients >= 0
-        ? Math.floor(minRecipients)
-        : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchMinRecipients,
+    batchMinRecipients: 0,
     batchMaxRecipientsPerRun:
       Number.isFinite(maxRecipients) && maxRecipients >= 1
         ? Math.floor(maxRecipients)
         : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchMaxRecipientsPerRun,
+    submitConcurrency:
+      Number.isFinite(concurrency) && concurrency >= 1 && concurrency <= 10
+        ? Math.floor(concurrency)
+        : DEFAULT_LOB_FULFILLMENT_SETTINGS.submitConcurrency,
     color: raw.color !== false,
     doubleSided: raw.doubleSided !== false,
     mailType,
@@ -180,6 +185,9 @@ export function validateLobFulfillmentSettings(settings: LobFulfillmentSettings)
   if (settings.batchMinQueuedCards < 1) return "batchMinQueuedCards must be >= 1";
   if (settings.batchMinRecipients < 0) return "batchMinRecipients must be >= 0";
   if (settings.batchMaxRecipientsPerRun < 1) return "batchMaxRecipientsPerRun must be >= 1";
+  if (settings.submitConcurrency < 1 || settings.submitConcurrency > 10) {
+    return "submitConcurrency must be between 1 and 10";
+  }
 
   if (settings.lobEnabled) {
     const addrErr = returnAddressValidationMessage(settings);

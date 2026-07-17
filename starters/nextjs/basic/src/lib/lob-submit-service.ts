@@ -7,7 +7,7 @@ import {
   chunkPostcardsForLobLetters,
   POSTCARDS_PER_LOB_LETTER_MAX,
 } from "@/lib/build-lob-letter-html";
-import { buildItemsFromDeliveryIds, buildQueueDetailPayload } from "@/lib/build-print-queue-detail";
+import { buildItemsFromDeliveryIds, buildQueueDetailForRecipient } from "@/lib/build-print-queue-detail";
 import { enrichItemsForLobLetter } from "@/lib/enrich-lob-letter-items";
 import { returnAddressToLobAddress, userDocToLobAddress } from "@/lib/lob-address";
 import { createLobLetter, formatLobSubmitErrorMessage, lobConfigured, type LobApiError } from "@/lib/lob-client";
@@ -23,14 +23,15 @@ import {
   type PrintJobStatus,
   type PrintJobTrigger,
 } from "@/lib/print-job";
-import { isInPrintQueue, type DeliveryDocShape } from "@/lib/print-fulfillment";
-import { MAX_DELIVERY_DOCS_SCAN, normalizedRecipientId, scanAllDeliveryDocs } from "@/lib/printing-delivery-scan";
+import { type DeliveryDocShape } from "@/lib/print-fulfillment";
+import { scanAwaitingPrintByRecipient } from "@/lib/printing-delivery-scan";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 /** Lob letters pack many postcards across compact multi-page HTML (cover + 4-up pages). */
 export const MAX_POSTCARDS_PER_LETTER = POSTCARDS_PER_LOB_LETTER_MAX;
 
-export const MAX_RECIPIENTS_PER_SUBMIT = 25;
+/** Hard safety cap per API request (settings.batchMaxRecipientsPerRun should stay at or below this). */
+export const MAX_RECIPIENTS_PER_SUBMIT = 100;
 
 export type SubmitRecipientResult = {
   recipientUid: string;
@@ -52,20 +53,54 @@ export type SubmitBatchResult = {
 
 async function loadBusyDeliveryIds(db: Firestore): Promise<Set<string>> {
   const busy = new Set<string>();
-  const snap = await db
-    .collection(PRINT_JOBS_COLLECTION)
-    .where("status", "in", ["pending", "submitted", "in_production", "mailed"])
-    .limit(500)
-    .get();
+  const statuses: PrintJobStatus[] = ["pending", "submitted", "in_production", "mailed"];
 
-  for (const doc of snap.docs) {
-    const ids = doc.data().deliveryIds;
-    if (!Array.isArray(ids)) continue;
-    for (const id of ids) {
-      if (typeof id === "string") busy.add(id);
+  for (const status of statuses) {
+    const snap = await db
+      .collection(PRINT_JOBS_COLLECTION)
+      .where("status", "==", status)
+      .limit(2000)
+      .get();
+
+    for (const doc of snap.docs) {
+      const ids = doc.data().deliveryIds;
+      if (!Array.isArray(ids)) continue;
+      for (const id of ids) {
+        if (typeof id === "string") busy.add(id);
+      }
     }
   }
+
   return busy;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]!);
+    }
+  }
+
+  const workers = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
+function deliveryRefForItem(
+  db: Firestore,
+  item: { mailPostId: string; deliveryId: string },
+) {
+  return db.collection("mailPosts").doc(item.mailPostId).collection("deliveries").doc(item.deliveryId);
 }
 
 function validateReturnAddress(settings: LobFulfillmentSettings): string | null {
@@ -131,11 +166,6 @@ export async function submitLobJobsForRecipients(
   }
   const lobFrom = fromResult.address;
 
-  const allDocs = await scanAllDeliveryDocs(db);
-  if (allDocs.length >= MAX_DELIVERY_DOCS_SCAN) {
-    throw new Error(`Too many delivery documents (>= ${MAX_DELIVERY_DOCS_SCAN}).`);
-  }
-
   const busyDeliveryIds = await loadBusyDeliveryIds(db);
   const postCache = new Map<string, Record<string, unknown> | null>();
   const results: SubmitRecipientResult[] = [];
@@ -143,196 +173,197 @@ export async function submitLobJobsForRecipients(
   let skipped = 0;
   let failed = 0;
 
-  for (const recipientUid of uniqueUids) {
-    const uid = recipientUid.trim();
+  const perRecipientResults = await mapWithConcurrency(
+    uniqueUids,
+    settings.submitConcurrency,
+    async (recipientUid) => {
+      const uid = recipientUid.trim();
+      const localResults: SubmitRecipientResult[] = [];
+      let localSubmitted = 0;
+      let localSkipped = 0;
+      let localFailed = 0;
 
-    try {
-      const payload = await buildQueueDetailPayload(db, uid, allDocs, postCache);
-      const eligible = payload.items.filter((item) => (item.deliveryStatus ?? "") === "awaiting_print");
+      try {
+        const payload = await buildQueueDetailForRecipient(db, uid, postCache, { scope: "awaiting_print" });
+        const eligible = payload.items.filter((item) => (item.deliveryStatus ?? "") === "awaiting_print");
 
-      if (eligible.length === 0) {
-        skipped++;
-        results.push({
-          recipientUid: uid,
-          status: "skipped",
-          reason: payload.items.length > 0 ? "No awaiting_print cards (may be missing address)" : "Queue empty",
-        });
-        continue;
-      }
-
-      if (eligible.length < settings.batchMinQueuedCards && trigger === "auto") {
-        skipped++;
-        results.push({
-          recipientUid: uid,
-          status: "skipped",
-          reason: `Only ${eligible.length} card(s); batchMinQueuedCards is ${settings.batchMinQueuedCards}`,
-        });
-        continue;
-      }
-
-      const freshItems = eligible.filter((i) => !busyDeliveryIds.has(i.deliveryId));
-
-      if (freshItems.length === 0) {
-        skipped++;
-        results.push({ recipientUid: uid, status: "skipped", reason: "Deliveries already in an active print job" });
-        continue;
-      }
-
-      const toResult = userDocToLobAddress(payload.user);
-      if (!toResult.ok) {
-        failed++;
-        results.push({
-          recipientUid: uid,
-          status: "failed",
-          reason: toResult.error,
-        });
-        continue;
-      }
-
-      const lobTo = toResult.address;
-      const displayName = lobTo.name;
-      const chunks = chunkPostcardsForLobLetters(freshItems, settings.doubleSided);
-
-      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-        const chunk = chunks[chunkIndex]!;
-        const enrichment = await enrichItemsForLobLetter(db, chunk, uid);
-        const html = buildLobLetterHtml(enrichment.items, {
-          recipientName: displayName,
-          recipientSnailImageUrl: enrichment.recipientSnailImageUrl,
-          doubleSided: settings.doubleSided,
-        });
-        const mailPostIds = [...new Set(chunk.map((i) => i.mailPostId))];
-        const jobId = printJobIdForRecipient(uid, chunk.map((i) => i.deliveryId));
-        const letterFile = await resolveLobLetterFile(html, jobId);
-
-        const jobRef = db.collection(PRINT_JOBS_COLLECTION).doc(jobId);
-        const existing = await jobRef.get();
-        const prior = existing.data();
-        if (existing.exists) {
-          const st = prior?.status;
-          if (st === "submitted" || st === "in_production" || st === "mailed") {
-            skipped++;
-            results.push({
-              recipientUid: uid,
-              status: "skipped",
-              reason: "Print job already submitted",
-              jobId,
-            });
-            continue;
-          }
+        if (eligible.length === 0) {
+          localSkipped += 1;
+          localResults.push({
+            recipientUid: uid,
+            status: "skipped",
+            reason: payload.items.length > 0 ? "No awaiting_print cards (may be missing address)" : "Queue empty",
+          });
+          return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
         }
 
-        const priorRetryCount = typeof prior?.retryCount === "number" ? prior.retryCount : 0;
-        const retryCount = prior?.status === "failed" ? priorRetryCount + 1 : priorRetryCount;
-        const idempotencyKey =
-          retryCount > 0 ? `${jobId}_retry${retryCount}`.slice(0, 255) : jobId;
-
-        await jobRef.set(
-          {
+        if (eligible.length < settings.batchMinQueuedCards && trigger === "auto") {
+          localSkipped += 1;
+          localResults.push({
             recipientUid: uid,
-            recipientDisplayName: displayName,
-            toName: lobTo.name,
-            toCity: lobTo.address_city,
-            toState: lobTo.address_state,
-            toZip: lobTo.address_zip,
-            productType: settings.productType,
-            deliveryIds: chunk.map((i) => i.deliveryId),
-            mailPostIds,
-            cardCount: chunk.length,
-            status: "pending",
-            trigger,
-            chunkIndex: chunkIndex + 1,
-            chunkTotal: chunks.length,
-            retryCount,
-            htmlCharCount: letterFile.htmlCharCount,
-            htmlStoragePath: letterFile.htmlStoragePath ?? null,
-            htmlStorageUrl: letterFile.htmlStorageUrl ?? null,
-            updatedAt: FieldValue.serverTimestamp(),
-            createdAt: existing.exists
-              ? (prior?.createdAt ?? FieldValue.serverTimestamp())
-              : FieldValue.serverTimestamp(),
-          },
-          { merge: true },
-        );
-
-        let letter;
-        try {
-          const chunkLabel =
-            chunks.length > 1 ? ` · sheet ${chunkIndex + 1}/${chunks.length}` : "";
-          letter = await createLobLetter(db, settings.lobEnvironment, {
-            description: `Snail Mail · ${chunk.length} postcard(s)${chunkLabel}`.slice(0, 255),
-            to: lobTo,
-            from: lobFrom,
-            file: letterFile.file,
-            color: settings.color,
-            double_sided: settings.doubleSided,
-            mail_type: settings.mailType,
-            address_placement: settings.addressPlacement,
-            size: lobLetterSizeForProduct(settings.productType),
-            use_type: "operational",
-            idempotencyKey,
-            metadata: {
-              recipient_uid: uid,
-              print_job_id: jobId,
-              card_count: String(chunk.length),
-              product: settings.productType,
-              chunk_index: String(chunkIndex + 1),
-              chunk_total: String(chunks.length),
-            },
+            status: "skipped",
+            reason: `Only ${eligible.length} awaiting-print card(s); auto-send threshold is ${settings.batchMinQueuedCards}`,
           });
-        } catch (lobErr) {
-          const err = lobErr as LobApiError;
-          const raw = err?.message ?? (lobErr instanceof Error ? lobErr.message : "Lob submit failed");
-          const msg = formatLobSubmitErrorMessage(raw);
+          return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
+        }
+
+        const freshItems = eligible.filter((i) => !busyDeliveryIds.has(i.deliveryId));
+
+        if (freshItems.length === 0) {
+          localSkipped += 1;
+          localResults.push({ recipientUid: uid, status: "skipped", reason: "Deliveries already in an active print job" });
+          return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
+        }
+
+        const toResult = userDocToLobAddress(payload.user);
+        if (!toResult.ok) {
+          localFailed += 1;
+          localResults.push({
+            recipientUid: uid,
+            status: "failed",
+            reason: toResult.error,
+          });
+          return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
+        }
+
+        const lobTo = toResult.address;
+        const displayName = lobTo.name;
+        const chunks = chunkPostcardsForLobLetters(freshItems, settings.doubleSided);
+
+        for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+          const chunk = chunks[chunkIndex]!;
+          const enrichment = await enrichItemsForLobLetter(db, chunk, uid);
+          const html = buildLobLetterHtml(enrichment.items, {
+            recipientName: displayName,
+            recipientSnailImageUrl: enrichment.recipientSnailImageUrl,
+            doubleSided: settings.doubleSided,
+          });
+          const mailPostIds = [...new Set(chunk.map((i) => i.mailPostId))];
+          const jobId = printJobIdForRecipient(uid, chunk.map((i) => i.deliveryId));
+          const letterFile = await resolveLobLetterFile(html, jobId);
+
+          const jobRef = db.collection(PRINT_JOBS_COLLECTION).doc(jobId);
+          const existing = await jobRef.get();
+          const prior = existing.data();
+          if (existing.exists) {
+            const st = prior?.status;
+            if (st === "submitted" || st === "in_production" || st === "mailed") {
+              localSkipped += 1;
+              localResults.push({
+                recipientUid: uid,
+                status: "skipped",
+                reason: "Print job already submitted",
+                jobId,
+              });
+              continue;
+            }
+          }
+
+          const priorRetryCount = typeof prior?.retryCount === "number" ? prior.retryCount : 0;
+          const retryCount = prior?.status === "failed" ? priorRetryCount + 1 : priorRetryCount;
+          const idempotencyKey =
+            retryCount > 0 ? `${jobId}_retry${retryCount}`.slice(0, 255) : jobId;
+
           await jobRef.set(
             {
-              status: "failed",
-              errorMessage: msg,
+              recipientUid: uid,
+              recipientDisplayName: displayName,
+              toName: lobTo.name,
+              toCity: lobTo.address_city,
+              toState: lobTo.address_state,
+              toZip: lobTo.address_zip,
+              productType: settings.productType,
+              deliveryIds: chunk.map((i) => i.deliveryId),
+              mailPostIds,
+              cardCount: chunk.length,
+              status: "pending",
+              trigger,
+              chunkIndex: chunkIndex + 1,
+              chunkTotal: chunks.length,
+              retryCount,
+              htmlCharCount: letterFile.htmlCharCount,
+              htmlStoragePath: letterFile.htmlStoragePath ?? null,
+              htmlStorageUrl: letterFile.htmlStorageUrl ?? null,
               updatedAt: FieldValue.serverTimestamp(),
+              createdAt: existing.exists
+                ? (prior?.createdAt ?? FieldValue.serverTimestamp())
+                : FieldValue.serverTimestamp(),
             },
             { merge: true },
           );
-          failed++;
-          results.push({
-            recipientUid: uid,
-            jobId,
-            status: "failed",
-            reason: msg,
-            toName: lobTo.name,
-            toCity: lobTo.address_city,
-            cardCount: chunk.length,
-          });
-          continue;
-        }
 
-        const now = FieldValue.serverTimestamp();
-        await jobRef.set(
-          {
-            status: "submitted",
-            lobLetterId: letter.id,
-            lobUrl: letter.url ?? null,
-            lobTrackingNumber: letter.tracking_number ?? null,
-            lobExpectedDeliveryDate: letter.expected_delivery_date ?? null,
-            submittedAt: now,
-            updatedAt: now,
-            errorMessage: null,
-          },
-          { merge: true },
-        );
+          let letter;
+          try {
+            const chunkLabel =
+              chunks.length > 1 ? ` · sheet ${chunkIndex + 1}/${chunks.length}` : "";
+            letter = await createLobLetter(db, settings.lobEnvironment, {
+              description: `Snail Mail · ${chunk.length} postcard(s)${chunkLabel}`.slice(0, 255),
+              to: lobTo,
+              from: lobFrom,
+              file: letterFile.file,
+              color: settings.color,
+              double_sided: settings.doubleSided,
+              mail_type: settings.mailType,
+              address_placement: settings.addressPlacement,
+              size: lobLetterSizeForProduct(settings.productType),
+              use_type: "operational",
+              idempotencyKey,
+              metadata: {
+                recipient_uid: uid,
+                print_job_id: jobId,
+                card_count: String(chunk.length),
+                product: settings.productType,
+                chunk_index: String(chunkIndex + 1),
+                chunk_total: String(chunks.length),
+              },
+            });
+          } catch (lobErr) {
+            const err = lobErr as LobApiError;
+            const raw = err?.message ?? (lobErr instanceof Error ? lobErr.message : "Lob submit failed");
+            const msg = formatLobSubmitErrorMessage(raw);
+            await jobRef.set(
+              {
+                status: "failed",
+                errorMessage: msg,
+                updatedAt: FieldValue.serverTimestamp(),
+              },
+              { merge: true },
+            );
+            localFailed += 1;
+            localResults.push({
+              recipientUid: uid,
+              jobId,
+              status: "failed",
+              reason: msg,
+              toName: lobTo.name,
+              toCity: lobTo.address_city,
+              cardCount: chunk.length,
+            });
+            continue;
+          }
 
-        const matchingDocs = allDocs.filter((doc) => {
-          const d = doc.data() as DeliveryDocShape;
-          if (normalizedRecipientId(d) !== uid) return false;
-          return chunk.some((i) => i.deliveryId === doc.id) && isInPrintQueue(d);
-        });
+          const now = FieldValue.serverTimestamp();
+          await jobRef.set(
+            {
+              status: "submitted",
+              lobLetterId: letter.id,
+              lobUrl: letter.url ?? null,
+              lobTrackingNumber: letter.tracking_number ?? null,
+              lobExpectedDeliveryDate: letter.expected_delivery_date ?? null,
+              submittedAt: now,
+              updatedAt: now,
+              errorMessage: null,
+            },
+            { merge: true },
+          );
 
-        if (matchingDocs.length > 0) {
           const batch = db.batch();
-          for (const doc of matchingDocs) {
+          for (const item of chunk) {
             batch.set(
-              doc.ref,
+              deliveryRefForItem(db, item),
               {
                 physicalPrintedAt: now,
+                isPhysicallyPrinted: true,
                 lobLetterId: letter.id,
                 fulfillmentStatus: "submitted",
                 fulfillmentProvider: "lob",
@@ -341,30 +372,39 @@ export async function submitLobJobsForRecipients(
             );
           }
           await batch.commit();
-        }
 
-        for (const item of chunk) {
-          busyDeliveryIds.add(item.deliveryId);
-        }
+          for (const item of chunk) {
+            busyDeliveryIds.add(item.deliveryId);
+          }
 
-        submitted++;
-        results.push({
-          recipientUid: uid,
-          jobId,
-          status: "submitted",
-          lobLetterId: letter.id,
-          cardCount: chunk.length,
-          toName: lobTo.name,
-          toCity: lobTo.address_city,
-          reason: chunks.length > 1 ? `Sheet ${chunkIndex + 1} of ${chunks.length}` : undefined,
-        });
+          localSubmitted += 1;
+          localResults.push({
+            recipientUid: uid,
+            jobId,
+            status: "submitted",
+            lobLetterId: letter.id,
+            cardCount: chunk.length,
+            toName: lobTo.name,
+            toCity: lobTo.address_city,
+            reason: chunks.length > 1 ? `Sheet ${chunkIndex + 1} of ${chunks.length}` : undefined,
+          });
+        }
+      } catch (e) {
+        localFailed += 1;
+        const err = e as LobApiError;
+        const msg = err?.message ?? (e instanceof Error ? e.message : "Submit failed");
+        localResults.push({ recipientUid: uid, status: "failed", reason: msg });
       }
-    } catch (e) {
-      failed++;
-      const err = e as LobApiError;
-      const msg = err?.message ?? (e instanceof Error ? e.message : "Submit failed");
-      results.push({ recipientUid: uid, status: "failed", reason: msg });
-    }
+
+      return { submitted: localSubmitted, skipped: localSkipped, failed: localFailed, results: localResults };
+    },
+  );
+
+  for (const chunk of perRecipientResults) {
+    submitted += chunk.submitted;
+    skipped += chunk.skipped;
+    failed += chunk.failed;
+    results.push(...chunk.results);
   }
 
   return { submitted, skipped, failed, results };
@@ -451,6 +491,10 @@ export async function resubmitPrintJob(
     ? parent.deliveryIds.filter((x): x is string => typeof x === "string")
     : [];
 
+  const mailPostIds = Array.isArray(parent.mailPostIds)
+    ? parent.mailPostIds.filter((x): x is string => typeof x === "string")
+    : [];
+
   if (!recipientUid || deliveryIds.length === 0) {
     return {
       submitted: 0,
@@ -461,9 +505,8 @@ export async function resubmitPrintJob(
   }
 
   try {
-    const allDocs = await scanAllDeliveryDocs(db);
     const postCache = new Map<string, Record<string, unknown> | null>();
-    const items = await buildItemsFromDeliveryIds(db, deliveryIds, allDocs, postCache);
+    const items = await buildItemsFromDeliveryIds(db, deliveryIds, mailPostIds, recipientUid, postCache);
 
     if (items.length === 0) {
       return {
@@ -506,7 +549,7 @@ export async function resubmitPrintJob(
     const resubmitSeq = (typeof parent.resubmitCount === "number" ? parent.resubmitCount : 0) + 1;
     const newJobId = printJobResubmitId(parentId, resubmitSeq);
     const letterFile = await resolveLobLetterFile(html, newJobId);
-    const mailPostIds = [...new Set(items.map((i) => i.mailPostId))];
+    const jobMailPostIds = [...new Set(items.map((i) => i.mailPostId))];
     const idempotencyKey = newJobId;
 
     const newJobRef = db.collection(PRINT_JOBS_COLLECTION).doc(newJobId);
@@ -520,7 +563,7 @@ export async function resubmitPrintJob(
         toZip: lobTo.address_zip,
         productType: settings.productType,
         deliveryIds: items.map((i) => i.deliveryId),
-        mailPostIds,
+        mailPostIds: jobMailPostIds,
         cardCount: items.length,
         status: "pending",
         trigger: "manual",
@@ -608,21 +651,19 @@ export async function resubmitPrintJob(
       { merge: true },
     );
 
-    const deliveryIdSet = new Set(items.map((i) => i.deliveryId));
-    const matchingDocs = allDocs.filter((doc) => deliveryIdSet.has(doc.id));
-    if (matchingDocs.length > 0) {
-      const batch = db.batch();
-      for (const doc of matchingDocs) {
-        batch.set(
-          doc.ref,
-          {
-            lobLetterId: letter.id,
-            fulfillmentStatus: "submitted",
-            fulfillmentProvider: "lob",
-          },
-          { merge: true },
-        );
-      }
+    const batch = db.batch();
+    for (const item of items) {
+      batch.set(
+        deliveryRefForItem(db, item),
+        {
+          lobLetterId: letter.id,
+          fulfillmentStatus: "submitted",
+          fulfillmentProvider: "lob",
+        },
+        { merge: true },
+      );
+    }
+    if (items.length > 0) {
       await batch.commit();
     }
 
@@ -660,38 +701,30 @@ export async function loadLobSettings(db: Firestore): Promise<LobFulfillmentSett
   return parseLobFulfillmentSettings(serializeDoc(snap.data() ?? undefined) ?? undefined);
 }
 
+export function findAutoSendCandidatesFromCounts(
+  recipientCounts: Map<string, number>,
+  settings: LobFulfillmentSettings,
+  _options?: { ignoreMinRecipients?: boolean },
+): string[] {
+  const candidates: string[] = [];
+  for (const [uid, count] of recipientCounts) {
+    if (count >= settings.batchMinQueuedCards) candidates.push(uid);
+  }
+
+  candidates.sort((a, b) => (recipientCounts.get(b) ?? 0) - (recipientCounts.get(a) ?? 0));
+  return candidates.slice(0, settings.batchMaxRecipientsPerRun);
+}
+
 export async function findAutoSendCandidates(
   db: Firestore,
   settings: LobFulfillmentSettings,
   options?: { ignoreMinRecipients?: boolean },
 ): Promise<string[]> {
-  const allDocs = await scanAllDeliveryDocs(db);
-  const counts = new Map<string, number>();
-
-  for (const doc of allDocs) {
-    const d = doc.data() as DeliveryDocShape;
-    if ((d.deliveryStatus ?? "") !== "awaiting_print") continue;
-    if (d.physicalPrintedAt != null) continue;
-    const uid = normalizedRecipientId(d);
-    if (!uid) continue;
-    counts.set(uid, (counts.get(uid) ?? 0) + 1);
+  const scan = await scanAwaitingPrintByRecipient(db);
+  if (!scan.scanComplete) {
+    throw new Error("Awaiting-print scan incomplete — run auto processor to finish scanning first");
   }
-
-  const candidates: string[] = [];
-  for (const [uid, count] of counts) {
-    if (count >= settings.batchMinQueuedCards) candidates.push(uid);
-  }
-
-  if (
-    !options?.ignoreMinRecipients &&
-    settings.batchMinRecipients > 0 &&
-    candidates.length < settings.batchMinRecipients
-  ) {
-    return [];
-  }
-
-  candidates.sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0));
-  return candidates.slice(0, settings.batchMaxRecipientsPerRun);
+  return findAutoSendCandidatesFromCounts(scan.recipientCounts, settings, options);
 }
 
 export function shouldRunAutoBatch(

@@ -10,11 +10,11 @@ import {
   LOB_PRODUCT_LABELS,
   missingReturnAddressFields,
   returnAddressValidationMessage,
-  type LobAutoSendMode,
   type LobFulfillmentSettings,
   type LobProductType,
   type ReturnAddressRequiredField,
 } from "@/lib/lob-fulfillment-settings";
+import { POSTCARDS_COVER_PAGE, POSTCARDS_PER_CONTENT_PAGE } from "@/lib/build-lob-letter-html";
 
 const RETURN_ADDRESS_FIELDS: {
   key: keyof LobFulfillmentSettings["returnAddress"];
@@ -39,18 +39,33 @@ export default function LobSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [processMsg, setProcessMsg] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [processorStats, setProcessorStats] = useState<{
+    lastRunAt: string | null;
+    lastRunStats: Record<string, unknown> | null;
+    scanResumeAfterPath: string | null;
+  } | null>(null);
   const returnAddressRef = useRef<HTMLElement>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
     setLoadError(null);
     try {
-      const data = await apiJson<{
-        settings: LobFulfillmentSettings;
-        lastAutoRunAt?: string;
-      }>("/api/printing/lob-settings");
+      const [data, processor] = await Promise.all([
+        apiJson<{
+          settings: LobFulfillmentSettings;
+          lastAutoRunAt?: string;
+        }>("/api/printing/lob-settings"),
+        apiJson<{
+          processor: {
+            lastRunAt: string | null;
+            lastRunStats: Record<string, unknown> | null;
+            scanResumeAfterPath: string | null;
+          };
+        }>("/api/printing/processor-status").catch(() => null),
+      ]);
       setSettings(data.settings);
       setLastAutoRunAt(data.lastAutoRunAt ?? null);
+      setProcessorStats(processor?.processor ?? null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : "Failed to load");
       setSettings({ ...DEFAULT_LOB_FULFILLMENT_SETTINGS, returnAddress: { ...DEFAULT_LOB_FULFILLMENT_SETTINGS.returnAddress } });
@@ -112,7 +127,7 @@ export default function LobSettingsPage() {
     setProcessing(true);
     setProcessMsg(null);
     try {
-      const res = await apiFetch("/api/printing/process-auto", { method: "POST" });
+      const res = await apiFetch("/api/printing/process-auto?force=1", { method: "POST" });
       const text = await res.text();
       if (!res.ok) {
         let msg = text;
@@ -127,16 +142,28 @@ export default function LobSettingsPage() {
       const j = JSON.parse(text) as {
         ran?: boolean;
         reason?: string;
-        submitted?: number;
-        skipped?: number;
-        failed?: number;
+        telemetry?: {
+          unprintedAwaitingCount?: number;
+          eligibleRecipients?: number;
+          candidateCount?: number;
+          submitted?: number;
+          skipped?: number;
+          failed?: number;
+          warnings?: string[];
+        };
+        submit?: { submitted?: number; skipped?: number; failed?: number };
       };
       if (!j.ran) {
-        setProcessMsg(j.reason ?? "Auto processor did not run");
+        const t = j.telemetry;
+        const extra = t
+          ? ` · ${t.unprintedAwaitingCount ?? 0} awaiting-print, ${t.eligibleRecipients ?? 0} eligible`
+          : "";
+        setProcessMsg((j.reason ?? "Auto processor did not run") + extra);
       } else {
-        setProcessMsg(
-          `Submitted ${j.submitted ?? 0}, skipped ${j.skipped ?? 0}, failed ${j.failed ?? 0}`,
-        );
+        const submitted = j.submit?.submitted ?? j.telemetry?.submitted ?? 0;
+        const skipped = j.submit?.skipped ?? j.telemetry?.skipped ?? 0;
+        const failed = j.submit?.failed ?? j.telemetry?.failed ?? 0;
+        setProcessMsg(`Submitted ${submitted}, skipped ${skipped}, failed ${failed}`);
       }
       await load();
     } catch (e) {
@@ -252,73 +279,173 @@ export default function LobSettingsPage() {
           <section className="rounded-xl border border-[#C8D5B9]/60 bg-white p-6 shadow-sm">
             <h2 className="text-lg font-medium text-[#2E2A24]">Automatic sending</h2>
             <p className="mt-1 text-sm text-[#5C564D]">
-              Control when queued postcards are submitted to Lob without manual action.
+              Physical postcards enter the print queue as soon as friends send mail (status{" "}
+              <code className="text-xs">awaiting_print</code> for Pro subscribers). Auto-send submits Lob
+              mailings when a recipient&apos;s queue reaches your post threshold — manual{" "}
+              <strong>Send to Lob</strong> from the Printing page ignores the threshold.
               {lastAutoRunAt ? (
-                <span className="block mt-1">
+                <span className="mt-1 block">
                   Last auto run: <time dateTime={lastAutoRunAt}>{new Date(lastAutoRunAt).toLocaleString()}</time>
                 </span>
               ) : null}
             </p>
 
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm sm:col-span-2">
-                <span className="font-medium text-[#2E2A24]">Auto-send mode</span>
-                <select
-                  value={s.autoSendMode}
-                  onChange={(e) => update({ autoSendMode: e.target.value as LobAutoSendMode })}
-                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                >
-                  <option value="disabled">Disabled — manual only</option>
-                  <option value="scheduled_batch">Scheduled batch — send on interval when queue has work</option>
-                  <option value="immediate">Immediate — process on each auto check (use with frequent polling)</option>
-                </select>
-              </label>
+            {(() => {
+              const autoSendOn = s.autoSendMode !== "disabled";
+              const throttleRuns = s.autoSendMode === "scheduled_batch";
+              const exampleLetterPosts =
+                POSTCARDS_COVER_PAGE + POSTCARDS_PER_CONTENT_PAGE * 3;
 
-              <label className="block text-sm">
-                <span className="font-medium text-[#2E2A24]">Batch interval (minutes)</span>
-                <input
-                  type="number"
-                  min={5}
-                  value={s.batchIntervalMinutes}
-                  onChange={(e) => update({ batchIntervalMinutes: Number(e.target.value) })}
-                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                />
-              </label>
+              return (
+                <div className="mt-4 space-y-4">
+                  <label className="flex items-start gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={autoSendOn}
+                      onChange={(e) =>
+                        update({
+                          autoSendMode: e.target.checked
+                            ? throttleRuns
+                              ? "scheduled_batch"
+                              : "immediate"
+                            : "disabled",
+                        })
+                      }
+                      className="mt-0.5 h-4 w-4 rounded border-[#C8D5B9] accent-[#4F6E43]"
+                    />
+                    <span>
+                      <span className="font-medium text-[#2E2A24]">Enable automatic Lob sending</span>
+                      <span className="mt-0.5 block text-xs text-[#5C564D]">
+                        Cloud Function checks every 5 minutes and submits eligible recipients to Lob.
+                      </span>
+                    </span>
+                  </label>
 
-              <label className="block text-sm">
-                <span className="font-medium text-[#2E2A24]">Min queued cards per recipient</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={s.batchMinQueuedCards}
-                  onChange={(e) => update({ batchMinQueuedCards: Number(e.target.value) })}
-                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                />
-              </label>
+                  {autoSendOn ? (
+                    <>
+                      <label className="block max-w-xs text-sm">
+                        <span className="font-medium text-[#2E2A24]">Posts before auto-send</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={s.batchMinQueuedCards}
+                          onChange={(e) => update({ batchMinQueuedCards: Number(e.target.value) })}
+                          className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
+                        />
+                        <span className="mt-1 block text-xs text-[#5C564D]">
+                          Auto-send when a recipient has at least this many physical postcards waiting.
+                          Default {exampleLetterPosts} fills one US letter (cover + 3 inside pages).{" "}
+                          <strong>All</strong> queued postcards are mailed, not just this number. Use a
+                          lower value while testing.
+                        </span>
+                      </label>
 
-              <label className="block text-sm">
-                <span className="font-medium text-[#2E2A24]">Min recipients before batch</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={s.batchMinRecipients}
-                  onChange={(e) => update({ batchMinRecipients: Number(e.target.value) })}
-                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                />
-                <span className="mt-1 block text-xs text-[#5C564D]">0 = no minimum</span>
-              </label>
+                      <label className="flex items-start gap-3 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={throttleRuns}
+                          onChange={(e) =>
+                            update({
+                              autoSendMode: e.target.checked ? "scheduled_batch" : "immediate",
+                            })
+                          }
+                          className="mt-0.5 h-4 w-4 rounded border-[#C8D5B9] accent-[#4F6E43]"
+                        />
+                        <span>
+                          <span className="font-medium text-[#2E2A24]">Throttle auto-send runs</span>
+                          <span className="mt-0.5 block text-xs text-[#5C564D]">
+                            Optional. When off, eligible recipients are sent on the next 5-minute check.
+                            When on, wait at least the interval below between runs that actually submit to
+                            Lob.
+                          </span>
+                        </span>
+                      </label>
 
-              <label className="block text-sm">
-                <span className="font-medium text-[#2E2A24]">Max recipients per auto run</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={s.batchMaxRecipientsPerRun}
-                  onChange={(e) => update({ batchMaxRecipientsPerRun: Number(e.target.value) })}
-                  className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                />
-              </label>
-            </div>
+                      {throttleRuns ? (
+                        <label className="block max-w-xs text-sm">
+                          <span className="font-medium text-[#2E2A24]">Minimum minutes between send runs</span>
+                          <input
+                            type="number"
+                            min={5}
+                            value={s.batchIntervalMinutes}
+                            onChange={(e) => update({ batchIntervalMinutes: Number(e.target.value) })}
+                            className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
+                          />
+                        </label>
+                      ) : null}
+
+                      <details className="rounded-lg border border-[#C8D5B9]/50 bg-[#FDFBF7] px-4 py-3 text-sm">
+                        <summary className="cursor-pointer font-medium text-[#2E2A24]">Advanced limits</summary>
+                        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                          <label className="block text-sm">
+                            <span className="font-medium text-[#2E2A24]">Max recipients per auto run</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              value={s.batchMaxRecipientsPerRun}
+                              onChange={(e) =>
+                                update({ batchMaxRecipientsPerRun: Number(e.target.value) })
+                              }
+                              className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
+                            />
+                            <span className="mt-1 block text-xs text-[#5C564D]">
+                              Safety cap when many people hit the threshold at once.
+                            </span>
+                          </label>
+                          <label className="block text-sm">
+                            <span className="font-medium text-[#2E2A24]">Submit concurrency</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={10}
+                              value={s.submitConcurrency}
+                              onChange={(e) => update({ submitConcurrency: Number(e.target.value) })}
+                              className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
+                            />
+                            <span className="mt-1 block text-xs text-[#5C564D]">
+                              Parallel Lob API calls per run (default 3).
+                            </span>
+                          </label>
+                        </div>
+                      </details>
+                    </>
+                  ) : null}
+                </div>
+              );
+            })()}
+
+            {processorStats?.lastRunStats ? (
+              <div className="mt-4 rounded-lg border border-[#C8D5B9]/50 bg-[#FDFBF7] px-4 py-3 text-xs text-[#5C564D]">
+                <p className="font-semibold text-[#2E2A24]">Last processor run</p>
+                <p className="mt-1">
+                  {processorStats.lastRunAt
+                    ? new Date(processorStats.lastRunAt).toLocaleString()
+                    : "—"}
+                  {" · "}
+                  {String(processorStats.lastRunStats.unprintedAwaitingCount ?? "—")} awaiting-print
+                  {" · "}
+                  {String(processorStats.lastRunStats.eligibleRecipients ?? "—")} eligible recipients
+                  {" · "}
+                  {String(processorStats.lastRunStats.submitted ?? 0)} submitted
+                </p>
+                {processorStats.scanResumeAfterPath ? (
+                  <p className="mt-1 text-amber-800">Queue scan in progress — next run will resume.</p>
+                ) : null}
+                {Array.isArray(processorStats.lastRunStats.warnings) &&
+                processorStats.lastRunStats.warnings.length > 0 ? (
+                  <p className="mt-1 text-amber-800">
+                    {processorStats.lastRunStats.warnings.join(" ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            <p className="mt-4 text-xs text-[#5C564D]">
+              Automatic runs are triggered by the <strong>processLobAutoPrint</strong> Cloud Function
+              (every 5 minutes). Set the same <code>LOB_AUTO_CRON_SECRET</code> in App Hosting and
+              Cloud Functions secrets.
+            </p>
 
             <button
               type="button"

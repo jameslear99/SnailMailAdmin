@@ -10,6 +10,7 @@ type UserRow = {
   username?: string;
   displayName?: string;
   mailsDeliveredTotal?: number;
+  snailmailPro?: boolean;
 };
 
 export default function UsersPage() {
@@ -103,6 +104,7 @@ export default function UsersPage() {
               <th className="px-4 py-3 font-medium">UID</th>
               <th className="px-4 py-3 font-medium">Username</th>
               <th className="px-4 py-3 font-medium">Display name</th>
+              <th className="px-4 py-3 font-medium text-center">SnailMail Pro</th>
               <th className="px-4 py-3 font-medium">Mail count</th>
             </tr>
           </thead>
@@ -116,6 +118,15 @@ export default function UsersPage() {
                 </td>
                 <td className="px-4 py-3">{r.username ?? "—"}</td>
                 <td className="px-4 py-3">{r.displayName ?? "—"}</td>
+                <td className="px-4 py-3 text-center">
+                  {r.snailmailPro ? (
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-[#E8EFE0] text-[#4F6E43]" title="SnailMail Pro active">
+                      ✓
+                    </span>
+                  ) : (
+                    <span className="text-[#5C564D]">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">{r.mailsDeliveredTotal ?? 0}</td>
               </tr>
             ))}

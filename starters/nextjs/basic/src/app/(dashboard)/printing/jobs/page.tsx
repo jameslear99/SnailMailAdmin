@@ -65,17 +65,59 @@ export default function PrintJobsPage() {
     void load();
   }, [load]);
 
+  const [processorNote, setProcessorNote] = useState<string | null>(null);
+
   useEffect(() => {
-    if (!settings?.lobEnabled || settings.autoSendMode === "disabled") return;
-    const intervalMs =
-      settings.autoSendMode === "immediate"
-        ? 2 * 60_000
-        : Math.max(60_000, (settings.batchIntervalMinutes || 60) * 60_000);
-    const id = window.setInterval(() => {
-      void apiFetch("/api/printing/process-auto", { method: "POST" }).then(() => load());
-    }, intervalMs);
-    return () => window.clearInterval(id);
-  }, [settings?.lobEnabled, settings?.autoSendMode, settings?.batchIntervalMinutes, load]);
+    let cancelled = false;
+    async function pollStatus() {
+      try {
+        const data = await apiJson<{
+          processor?: {
+            lastRunAt?: string | null;
+            lastRunStats?: {
+              unprintedAwaitingCount?: number;
+              eligibleRecipients?: number;
+              submitted?: number;
+              failed?: number;
+              scanComplete?: boolean;
+              warnings?: string[];
+            } | null;
+            scanResumeAfterPath?: string | null;
+          };
+        }>("/api/printing/processor-status");
+        if (cancelled) return;
+        const stats = data.processor?.lastRunStats;
+        if (!stats) {
+          setProcessorNote("Auto processor has not run yet (Cloud Scheduler runs every 5 min when configured).");
+          return;
+        }
+        const parts = [
+          stats.unprintedAwaitingCount != null
+            ? `${stats.unprintedAwaitingCount} awaiting-print`
+            : null,
+          stats.eligibleRecipients != null ? `${stats.eligibleRecipients} eligible` : null,
+          stats.submitted != null ? `${stats.submitted} submitted last run` : null,
+          stats.scanComplete === false || data.processor?.scanResumeAfterPath
+            ? "scan in progress"
+            : null,
+        ].filter(Boolean);
+        const warn = stats.warnings?.[0];
+        setProcessorNote(
+          parts.length > 0
+            ? `Processor: ${parts.join(" · ")}${warn ? ` · ${warn}` : ""}`
+            : null,
+        );
+      } catch {
+        if (!cancelled) setProcessorNote(null);
+      }
+    }
+    void pollStatus();
+    const id = window.setInterval(() => void pollStatus(), 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   const counts = useMemo(() => {
     const m: Partial<Record<PrintJobStatus, number>> = {};
@@ -193,6 +235,7 @@ export default function PrintJobsPage() {
 
       {error ? <p className="text-sm text-red-700">{error}</p> : null}
       {actionMsg ? <p className="text-sm text-[#4F6E43]">{actionMsg}</p> : null}
+      {processorNote ? <p className="text-xs text-[#5C564D]">{processorNote}</p> : null}
 
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <label className="flex items-center gap-2">

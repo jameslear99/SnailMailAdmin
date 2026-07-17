@@ -10,8 +10,13 @@ export type SnailPreviewLayerInput = {
   slug?: string;
 };
 
+const layerImageCache = new Map<string, Promise<HTMLImageElement>>();
+
 function loadLayerImage(layerId: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
+  const cached = layerImageCache.get(layerId);
+  if (cached) return cached;
+
+  const promise = new Promise<HTMLImageElement>((resolve, reject) => {
     void (async () => {
       try {
         const res = await apiFetch(`/api/snail-art-assets/${encodeURIComponent(layerId)}/media`);
@@ -27,14 +32,19 @@ function loadLayerImage(layerId: string): Promise<HTMLImageElement> {
         };
         img.onerror = () => {
           URL.revokeObjectURL(objectUrl);
+          layerImageCache.delete(layerId);
           reject(new Error(`Failed to decode layer ${layerId}`));
         };
         img.src = objectUrl;
       } catch (e) {
+        layerImageCache.delete(layerId);
         reject(e instanceof Error ? e : new Error(String(e)));
       }
     })();
   });
+
+  layerImageCache.set(layerId, promise);
+  return promise;
 }
 
 function drawLayer(
@@ -74,19 +84,33 @@ export async function renderSnailPreview(
     throw new Error("No layers to render");
   }
 
-  canvas.width = size;
-  canvas.height = size;
+  const offscreen = document.createElement("canvas");
+  offscreen.width = size;
+  offscreen.height = size;
+  const offCtx = offscreen.getContext("2d");
+  if (!offCtx) {
+    throw new Error("Canvas not supported");
+  }
+
+  offCtx.clearRect(0, 0, size, size);
+  const images = await Promise.all(layers.map((layer) => loadLayerImage(layer.id)));
+
+  for (let i = 0; i < images.length; i++) {
+    drawLayer(offCtx, images[i]!, tints[i] ?? null, size);
+  }
+
   const ctx = canvas.getContext("2d");
   if (!ctx) {
     throw new Error("Canvas not supported");
   }
 
-  ctx.clearRect(0, 0, size, size);
-  const images = await Promise.all(layers.map((layer) => loadLayerImage(layer.id)));
-
-  for (let i = 0; i < images.length; i++) {
-    drawLayer(ctx, images[i]!, tints[i] ?? null, size);
+  if (canvas.width !== size || canvas.height !== size) {
+    canvas.width = size;
+    canvas.height = size;
   }
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(offscreen, 0, 0);
 }
 
 /** Composite preview layers into a single PNG at catalog canvas size (1500×1500). */

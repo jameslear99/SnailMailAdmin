@@ -1,22 +1,18 @@
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { Timestamp } from "firebase-admin/firestore";
 import { NextResponse } from "next/server";
 
+import { runLobAutoProcessor } from "@/lib/lob-auto-processor";
 import { getAdminDb } from "@/lib/firebase-admin";
-import {
-  findAutoSendCandidates,
-  loadLobSettings,
-  shouldRunAutoBatch,
-  submitLobJobsForRecipients,
-} from "@/lib/lob-submit-service";
-import { requireAdminApi } from "@/lib/require-admin-api";
+import { loadLobSettings } from "@/lib/lob-submit-service";
+import { requireAdminOrCronApi } from "@/lib/require-admin-api";
 import { serializeDoc } from "@/lib/serialize-firestore";
 
 /**
  * Process automatic Lob submissions per `adminSettings/lobFulfillment`.
- * Safe to call on a schedule or from the jobs UI.
+ * Callable by admins (Bearer token) or Cloud Scheduler (`x-cron-secret`).
  */
 export async function POST(req: Request) {
-  const auth = await requireAdminApi(req);
+  const auth = await requireAdminOrCronApi(req);
   if (auth instanceof NextResponse) return auth;
 
   try {
@@ -27,53 +23,12 @@ export async function POST(req: Request) {
     const lastAutoRunAt =
       lastRaw instanceof Timestamp ? lastRaw.toDate() : lastRaw instanceof Date ? lastRaw : null;
 
-    if (!settings.lobEnabled) {
-      return NextResponse.json({
-        ok: true,
-        ran: false,
-        reason: "Lob fulfillment disabled",
-      });
-    }
-
-    if (settings.autoSendMode === "disabled") {
-      return NextResponse.json({
-        ok: true,
-        ran: false,
-        reason: "Auto send disabled",
-      });
-    }
-
-    if (settings.autoSendMode === "scheduled_batch" && !shouldRunAutoBatch(settings, lastAutoRunAt)) {
-      return NextResponse.json({
-        ok: true,
-        ran: false,
-        reason: `Waiting for batch interval (${settings.batchIntervalMinutes} min)`,
-        lastAutoRunAt: lastAutoRunAt?.toISOString() ?? null,
-      });
-    }
-
-    const candidates = await findAutoSendCandidates(db, settings, {
-      ignoreMinRecipients: settings.autoSendMode === "immediate",
-    });
-    if (candidates.length === 0) {
-      return NextResponse.json({
-        ok: true,
-        ran: false,
-        reason: "No eligible recipients in queue",
-      });
-    }
-
-    const result = await submitLobJobsForRecipients(db, settings, candidates, "auto");
-
-    await db.collection("adminSettings").doc("lobFulfillment").set(
-      { lastAutoRunAt: FieldValue.serverTimestamp() },
-      { merge: true },
-    );
+    const force = new URL(req.url).searchParams.get("force") === "1";
+    const result = await runLobAutoProcessor(db, settings, { lastAutoRunAt, force });
 
     return NextResponse.json({
       ok: true,
-      ran: true,
-      candidateCount: candidates.length,
+      auth: auth.kind,
       ...result,
     });
   } catch (e) {
@@ -87,7 +42,7 @@ export async function POST(req: Request) {
 
 /** GET returns whether auto processor would run now (dry check). */
 export async function GET(req: Request) {
-  const auth = await requireAdminApi(req);
+  const auth = await requireAdminOrCronApi(req);
   if (auth instanceof NextResponse) return auth;
 
   try {
@@ -97,9 +52,14 @@ export async function GET(req: Request) {
     const ser = serializeDoc(settingsSnap.data() ?? undefined);
     const lastIso = typeof ser?.lastAutoRunAt === "string" ? ser.lastAutoRunAt : undefined;
     const lastAutoRunAt = lastIso ? new Date(lastIso) : null;
-    const candidates = await findAutoSendCandidates(db, settings, {
-      ignoreMinRecipients: settings.autoSendMode === "immediate",
-    });
+
+    const { loadProcessorTelemetry } = await import("@/lib/lob-auto-processor");
+    const telemetry = await loadProcessorTelemetry(db);
+
+    const { shouldRunAutoBatch } = await import("@/lib/lob-submit-service");
+    const wouldRunInterval =
+      settings.autoSendMode === "immediate" ||
+      shouldRunAutoBatch(settings, lastAutoRunAt && !Number.isNaN(lastAutoRunAt.getTime()) ? lastAutoRunAt : null);
 
     return NextResponse.json({
       settings: {
@@ -108,15 +68,13 @@ export async function GET(req: Request) {
         batchIntervalMinutes: settings.batchIntervalMinutes,
         batchMinQueuedCards: settings.batchMinQueuedCards,
         batchMinRecipients: settings.batchMinRecipients,
+        batchMaxRecipientsPerRun: settings.batchMaxRecipientsPerRun,
+        submitConcurrency: settings.submitConcurrency,
       },
       lastAutoRunAt: lastIso ?? null,
+      processor: telemetry,
       wouldRun:
-        settings.lobEnabled &&
-        settings.autoSendMode !== "disabled" &&
-        (settings.autoSendMode === "immediate" ||
-          shouldRunAutoBatch(settings, lastAutoRunAt && !Number.isNaN(lastAutoRunAt.getTime()) ? lastAutoRunAt : null)),
-      candidateCount: candidates.length,
-      candidates: candidates.slice(0, 10),
+        settings.lobEnabled && settings.autoSendMode !== "disabled" && wouldRunInterval,
     });
   } catch (e) {
     console.error(e);
