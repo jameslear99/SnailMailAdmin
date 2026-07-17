@@ -281,7 +281,7 @@ export default function PrintJobsPage() {
                 <th className="px-3 py-2">Created</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Recipient</th>
-                <th className="px-3 py-2 text-center">Cards</th>
+                <th className="px-3 py-2 text-center">Posts</th>
                 <th className="px-3 py-2">Product</th>
                 <th className="px-3 py-2">Trigger</th>
                 <th className="px-3 py-2">Lob</th>
