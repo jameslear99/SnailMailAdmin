@@ -9,6 +9,7 @@ const nav = [
   { href: "/users", label: "Users" },
   { href: "/snails", label: "Snail art" },
   { href: "/printing", label: "Printing" },
+  { href: "/advertiser-waitlist", label: "Advertiser waitlist" },
   // Ad Management deferred until post-launch ad tier.
   { href: "/settings", label: "Settings" },
 ];
