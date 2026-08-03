@@ -38,11 +38,15 @@ export const THANK_YOU_MESSAGE = DEFAULT_LOB_THANK_YOU_MESSAGE;
 
 const SNAIL_PLACEHOLDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="56" height="56" aria-hidden="true"><ellipse cx="16" cy="20" rx="11" ry="8" fill="#8B9E7A"/><circle cx="16" cy="12" r="6" fill="#6E8B5E"/><circle cx="14" cy="11" r="1.2" fill="#2E2A24"/><path d="M20 10c2 1 3 3 3 5" stroke="#5C564D" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
 
-const COVER_SNAIL_IN = 1.85;
-const COVER_QUAD_HEIGHT_IN = 3.85;
+const COVER_SNAIL_IN = 1.75;
+const COVER_QUAD_HEIGHT_IN = 4.1;
 const GRID_QUAD_HEIGHT_IN = 4.75;
 const QUAD_PHOTO_IN = 2.5;
 const QUAD_COLUMN_WIDTH_IN = 4;
+/** Cover row uses tighter top inset so quads fit without overflowing the page. */
+const COVER_QUAD_PHOTO_TOP_IN = 0.2;
+/** Grid centers the photo in the wider column. */
+const GRID_QUAD_PHOTO_TOP_IN = (QUAD_COLUMN_WIDTH_IN - QUAD_PHOTO_IN) / 2;
 
 function escapeHtml(s: string): string {
   return s
@@ -83,8 +87,8 @@ function sentDateLabel(item: EnrichedPrintQueueItem): string {
   return formatSentOnDate(sent);
 }
 
-function quadContentStyle(): string {
-  const insetIn = (QUAD_COLUMN_WIDTH_IN - QUAD_PHOTO_IN) / 2;
+function quadContentStyle(variant: "cover" | "grid"): string {
+  const insetIn = variant === "cover" ? COVER_QUAD_PHOTO_TOP_IN : GRID_QUAD_PHOTO_TOP_IN;
   return `width:${QUAD_PHOTO_IN}in;margin:${insetIn}in auto 0;`;
 }
 
@@ -101,7 +105,10 @@ function renderSnailBadge(item: EnrichedPrintQueueItem): string {
   return `<span class="quad-snail-fallback">${SNAIL_PLACEHOLDER_SVG}</span>`;
 }
 
-function renderPostCell(item: EnrichedPrintQueueItem | undefined): string {
+function renderPostCell(
+  item: EnrichedPrintQueueItem | undefined,
+  variant: "cover" | "grid",
+): string {
   if (!item) {
     return `<td class="quad-cell quad-cell--empty">&nbsp;</td>`;
   }
@@ -121,7 +128,7 @@ function renderPostCell(item: EnrichedPrintQueueItem | undefined): string {
       <table class="quad-layout" cellpadding="0" cellspacing="0" width="100%" height="100%">
         <tr>
           <td class="quad-main" valign="top">
-            <div class="quad-content" style="${quadContentStyle()}">
+            <div class="quad-content" style="${quadContentStyle(variant)}">
               <div class="quad-photo-wrap">${imageBlock}</div>
               ${caption ? `<p class="quad-caption">${caption}</p>` : `<p class="quad-caption quad-caption--empty">&nbsp;</p>`}
             </div>
@@ -222,8 +229,8 @@ function renderPage(
         ${renderCoverIntro(recipientSnailImageUrl, thankYouMessage, showRecipientSnail)}
         <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
           <tr>
-            ${renderPostCell(left)}
-            ${renderPostCell(right)}
+            ${renderPostCell(left, "cover")}
+            ${renderPostCell(right, "cover")}
           </tr>
         </table>
       </div>
@@ -235,12 +242,12 @@ function renderPage(
     <div class="sheet sheet--grid">
       <table class="quad-table" cellpadding="0" cellspacing="0" width="100%">
         <tr>
-          ${renderPostCell(tl)}
-          ${renderPostCell(tr)}
+          ${renderPostCell(tl, "grid")}
+          ${renderPostCell(tr, "grid")}
         </tr>
         <tr>
-          ${renderPostCell(bl)}
-          ${renderPostCell(br)}
+          ${renderPostCell(bl, "grid")}
+          ${renderPostCell(br, "grid")}
         </tr>
       </table>
     </div>
@@ -292,13 +299,14 @@ export function buildLobLetterHtml(
       page-break-after: always;
     }
     .sheet:last-child { page-break-after: auto; }
-    .sheet + .sheet { page-break-before: always; }
     .sheet--cover {
-      padding-top: 2.65in;
+      padding-top: 2.55in;
+      max-height: 10.5in;
+      overflow: hidden;
     }
     .cover-intro {
       width: 100%;
-      padding: 0 0.55in 0.12in;
+      padding: 0 0.55in 0.08in;
       box-sizing: border-box;
     }
     .cover-intro-snail-wrap {
@@ -310,9 +318,13 @@ export function buildLobLetterHtml(
       margin: 0;
       padding: 0 0.12in;
       font-size: 10.5pt;
-      line-height: 1.4;
+      line-height: 1.35;
       text-align: left;
       color: #2E2A24;
+    }
+    .sheet--cover .thanks {
+      max-height: 0.95in;
+      overflow: hidden;
     }
     .cover-snail {
       height: ${COVER_SNAIL_IN}in;
@@ -386,6 +398,9 @@ export function buildLobLetterHtml(
       word-break: break-word;
       text-align: left;
     }
+    .sheet--cover .quad-caption {
+      max-height: 0.48in;
+    }
     .quad-caption--empty { visibility: hidden; }
     .quad-foot {
       padding: 0 0 0.1in;
@@ -441,6 +456,7 @@ export function buildLobLetterHtml(
     .sheet--cover .quad-cell,
     .sheet--cover .quad-layout {
       height: ${COVER_QUAD_HEIGHT_IN}in;
+      overflow: hidden;
     }
     .sheet--grid .quad-cell,
     .sheet--grid .quad-layout {
