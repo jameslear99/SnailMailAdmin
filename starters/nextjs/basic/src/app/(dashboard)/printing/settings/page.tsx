@@ -8,6 +8,7 @@ import { apiFetch, apiJson } from "@/lib/api-fetch";
 import {
   DEFAULT_LOB_FULFILLMENT_SETTINGS,
   DEFAULT_LOB_THANK_YOU_MESSAGE,
+  DAILY_AUTO_SEND_INTERVAL_MINUTES,
   LOB_PRODUCT_LABELS,
   missingReturnAddressFields,
   returnAddressValidationMessage,
@@ -301,7 +302,6 @@ export default function LobSettingsPage() {
 
             {(() => {
               const autoSendOn = s.autoSendMode !== "disabled";
-              const throttleRuns = s.autoSendMode === "scheduled_batch";
               const exampleLetterPosts =
                 POSTCARDS_COVER_PAGE + POSTCARDS_PER_CONTENT_PAGE * 3;
 
@@ -313,11 +313,8 @@ export default function LobSettingsPage() {
                       checked={autoSendOn}
                       onChange={(e) =>
                         update({
-                          autoSendMode: e.target.checked
-                            ? throttleRuns
-                              ? "scheduled_batch"
-                              : "immediate"
-                            : "disabled",
+                          autoSendMode: e.target.checked ? "scheduled_batch" : "disabled",
+                          batchIntervalMinutes: DAILY_AUTO_SEND_INTERVAL_MINUTES,
                         })
                       }
                       className="mt-0.5 h-4 w-4 rounded border-[#C8D5B9] accent-[#4F6E43]"
@@ -325,7 +322,9 @@ export default function LobSettingsPage() {
                     <span>
                       <span className="font-medium text-[#2E2A24]">Enable automatic Lob sending</span>
                       <span className="mt-0.5 block text-xs text-[#5C564D]">
-                        Cloud Function checks every 5 minutes and submits eligible recipients to Lob.
+                        Runs once per day at 9:00 AM Mountain Time via the{" "}
+                        <strong>processLobAutoPrint</strong> Cloud Function. Submits mail for any
+                        recipient who meets the post threshold below. No manual button click required.
                       </span>
                     </span>
                   </label>
@@ -348,40 +347,6 @@ export default function LobSettingsPage() {
                           lower value while testing.
                         </span>
                       </label>
-
-                      <label className="flex items-start gap-3 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={throttleRuns}
-                          onChange={(e) =>
-                            update({
-                              autoSendMode: e.target.checked ? "scheduled_batch" : "immediate",
-                            })
-                          }
-                          className="mt-0.5 h-4 w-4 rounded border-[#C8D5B9] accent-[#4F6E43]"
-                        />
-                        <span>
-                          <span className="font-medium text-[#2E2A24]">Throttle auto-send runs</span>
-                          <span className="mt-0.5 block text-xs text-[#5C564D]">
-                            Optional. When off, eligible recipients are sent on the next 5-minute check.
-                            When on, wait at least the interval below between runs that actually submit to
-                            Lob.
-                          </span>
-                        </span>
-                      </label>
-
-                      {throttleRuns ? (
-                        <label className="block max-w-xs text-sm">
-                          <span className="font-medium text-[#2E2A24]">Minimum minutes between send runs</span>
-                          <input
-                            type="number"
-                            min={5}
-                            value={s.batchIntervalMinutes}
-                            onChange={(e) => update({ batchIntervalMinutes: Number(e.target.value) })}
-                            className="mt-1 w-full rounded-lg border border-[#C8D5B9] px-3 py-2"
-                          />
-                        </label>
-                      ) : null}
 
                       <details className="rounded-lg border border-[#C8D5B9]/50 bg-[#FDFBF7] px-4 py-3 text-sm">
                         <summary className="cursor-pointer font-medium text-[#2E2A24]">Advanced limits</summary>
@@ -452,8 +417,8 @@ export default function LobSettingsPage() {
 
             <p className="mt-4 text-xs text-[#5C564D]">
               Automatic runs are triggered by the <strong>processLobAutoPrint</strong> Cloud Function
-              (every 5 minutes). Set the same <code>LOB_AUTO_CRON_SECRET</code> in App Hosting and
-              Cloud Functions secrets.
+              (daily at 9:00 AM Mountain Time). Set the same <code>LOB_AUTO_CRON_SECRET</code> in App
+              Hosting and Cloud Functions secrets, then redeploy functions after schedule changes.
             </p>
 
             <button

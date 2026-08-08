@@ -936,13 +936,22 @@ export async function findAutoSendCandidates(
   return findAutoSendCandidatesFromCounts(scan.recipientCounts, settings, options);
 }
 
+export function shouldRunAutoSend(
+  settings: LobFulfillmentSettings,
+  lastAutoRunAt: Date | null,
+  now: Date = new Date(),
+): boolean {
+  if (!settings.lobEnabled || settings.autoSendMode === "disabled") return false;
+  if (!lastAutoRunAt) return true;
+  const elapsedMs = now.getTime() - lastAutoRunAt.getTime();
+  return elapsedMs >= settings.batchIntervalMinutes * 60_000;
+}
+
+/** @deprecated Use shouldRunAutoSend */
 export function shouldRunAutoBatch(
   settings: LobFulfillmentSettings,
   lastAutoRunAt: Date | null,
   now: Date = new Date(),
 ): boolean {
-  if (!settings.lobEnabled || settings.autoSendMode !== "scheduled_batch") return false;
-  if (!lastAutoRunAt) return true;
-  const elapsedMs = now.getTime() - lastAutoRunAt.getTime();
-  return elapsedMs >= settings.batchIntervalMinutes * 60_000;
+  return shouldRunAutoSend(settings, lastAutoRunAt, now);
 }

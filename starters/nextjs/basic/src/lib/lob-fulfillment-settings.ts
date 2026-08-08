@@ -17,6 +17,9 @@ export type LobProductType = "letter_us" | "letter_us_legal" | "postcard_4x6";
 
 export type LobAutoSendMode = "disabled" | "immediate" | "scheduled_batch";
 
+/** Default interval between automatic Lob send runs (24 hours). */
+export const DAILY_AUTO_SEND_INTERVAL_MINUTES = 24 * 60;
+
 export type LobMailType = "usps_first_class" | "usps_standard";
 
 export type LobAddressPlacement = "top_first_page" | "insert_blank_page";
@@ -71,7 +74,7 @@ export const DEFAULT_LOB_FULFILLMENT_SETTINGS: LobFulfillmentSettings = {
   lobEnvironment: "test",
   productType: "letter_us",
   autoSendMode: "disabled",
-  batchIntervalMinutes: 60,
+  batchIntervalMinutes: DAILY_AUTO_SEND_INTERVAL_MINUTES,
   /** One full US letter: 2 postcards on cover + 3×4 inside (see build-lob-letter-html). */
   batchMinQueuedCards: 14,
   batchMinRecipients: 0,
