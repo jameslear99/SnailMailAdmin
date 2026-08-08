@@ -5,7 +5,7 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 import type { LobFulfillmentSettings } from "@/lib/lob-fulfillment-settings";
 import {
   findAutoSendCandidatesFromCounts,
-  shouldRunAutoBatch,
+  shouldRunAutoSend,
   submitLobJobsForRecipients,
   type SubmitBatchResult,
 } from "@/lib/lob-submit-service";
@@ -101,6 +101,13 @@ async function saveProcessorState(
   );
 }
 
+async function markLastAutoRun(db: Firestore): Promise<void> {
+  await db.collection("adminSettings").doc("lobFulfillment").set(
+    { lastAutoRunAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+}
+
 async function saveTelemetry(db: Firestore, telemetry: ProcessorTelemetry): Promise<void> {
   await db.collection("adminSettings").doc(LOB_AUTO_PROCESSOR_DOC).set(
     {
@@ -145,14 +152,10 @@ export async function runLobAutoProcessor(
     return { ran: false, reason: "Auto send disabled" };
   }
 
-  if (
-    !options?.force &&
-    settings.autoSendMode === "scheduled_batch" &&
-    !shouldRunAutoBatch(settings, options?.lastAutoRunAt ?? null)
-  ) {
+  if (!options?.force && !shouldRunAutoSend(settings, options?.lastAutoRunAt ?? null)) {
     return {
       ran: false,
-      reason: `Waiting for batch interval (${settings.batchIntervalMinutes} min)`,
+      reason: `Waiting for daily interval (${settings.batchIntervalMinutes} min since last run)`,
     };
   }
 
@@ -217,6 +220,7 @@ export async function runLobAutoProcessor(
       resumeAfterPath: null,
     };
     await saveTelemetry(db, telemetry);
+    await markLastAutoRun(db);
 
     return {
       ran: false,
@@ -245,11 +249,7 @@ export async function runLobAutoProcessor(
   };
 
   await saveTelemetry(db, telemetry);
-
-  await db.collection("adminSettings").doc("lobFulfillment").set(
-    { lastAutoRunAt: FieldValue.serverTimestamp() },
-    { merge: true },
-  );
+  await markLastAutoRun(db);
 
   return { ran: true, telemetry, submit };
 }

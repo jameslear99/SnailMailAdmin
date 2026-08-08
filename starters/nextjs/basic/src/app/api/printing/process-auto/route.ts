@@ -56,10 +56,11 @@ export async function GET(req: Request) {
     const { loadProcessorTelemetry } = await import("@/lib/lob-auto-processor");
     const telemetry = await loadProcessorTelemetry(db);
 
-    const { shouldRunAutoBatch } = await import("@/lib/lob-submit-service");
-    const wouldRunInterval =
-      settings.autoSendMode === "immediate" ||
-      shouldRunAutoBatch(settings, lastAutoRunAt && !Number.isNaN(lastAutoRunAt.getTime()) ? lastAutoRunAt : null);
+    const { shouldRunAutoSend } = await import("@/lib/lob-submit-service");
+    const wouldRunInterval = shouldRunAutoSend(
+      settings,
+      lastAutoRunAt && !Number.isNaN(lastAutoRunAt.getTime()) ? lastAutoRunAt : null,
+    );
 
     return NextResponse.json({
       settings: {
