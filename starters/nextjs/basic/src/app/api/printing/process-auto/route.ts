@@ -67,6 +67,7 @@ export async function GET(req: Request) {
         lobEnabled: settings.lobEnabled,
         autoSendMode: settings.autoSendMode,
         batchIntervalMinutes: settings.batchIntervalMinutes,
+        autoSendFrequency: settings.autoSendFrequency,
         batchMinQueuedCards: settings.batchMinQueuedCards,
         batchMinRecipients: settings.batchMinRecipients,
         batchMaxRecipientsPerRun: settings.batchMaxRecipientsPerRun,

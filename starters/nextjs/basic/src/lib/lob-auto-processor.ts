@@ -4,8 +4,8 @@ import { FieldValue, type Firestore } from "firebase-admin/firestore";
 
 import type { LobFulfillmentSettings } from "@/lib/lob-fulfillment-settings";
 import {
+  autoSendWaitReason,
   findAutoSendCandidatesFromCounts,
-  shouldRunAutoSend,
   submitLobJobsForRecipients,
   type SubmitBatchResult,
 } from "@/lib/lob-submit-service";
@@ -152,11 +152,11 @@ export async function runLobAutoProcessor(
     return { ran: false, reason: "Auto send disabled" };
   }
 
-  if (!options?.force && !shouldRunAutoSend(settings, options?.lastAutoRunAt ?? null)) {
-    return {
-      ran: false,
-      reason: `Waiting for daily interval (${settings.batchIntervalMinutes} min since last run)`,
-    };
+  if (!options?.force) {
+    const waitReason = autoSendWaitReason(settings, options?.lastAutoRunAt ?? null);
+    if (waitReason) {
+      return { ran: false, reason: waitReason };
+    }
   }
 
   const processorState = await loadProcessorState(db);

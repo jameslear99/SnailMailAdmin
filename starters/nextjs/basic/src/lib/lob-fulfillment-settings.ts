@@ -17,8 +17,61 @@ export type LobProductType = "letter_us" | "letter_us_legal" | "postcard_4x6";
 
 export type LobAutoSendMode = "disabled" | "immediate" | "scheduled_batch";
 
+/** How often scheduled auto-send actually submits mail. */
+export type LobAutoSendFrequency = "daily" | "weekly";
+
+/** Cloud Function timezone — auto-send checks weekday/date in this zone. */
+export const AUTO_SEND_TIMEZONE = "America/Denver";
+
+/** JS weekday: 0 = Sunday, 1 = Monday. Weekly mode only submits on this day. */
+export const WEEKLY_AUTO_SEND_WEEKDAY = 1;
+
 /** Default interval between automatic Lob send runs (24 hours). */
 export const DAILY_AUTO_SEND_INTERVAL_MINUTES = 24 * 60;
+
+/** Interval stored for weekly auto-send (7 days). */
+export const WEEKLY_AUTO_SEND_INTERVAL_MINUTES = 7 * 24 * 60;
+
+export const AUTO_SEND_FREQUENCY_LABELS: Record<LobAutoSendFrequency, string> = {
+  daily: "Every day at 9:00 AM Mountain Time",
+  weekly: "Every Monday at 9:00 AM Mountain Time",
+};
+
+export function intervalMinutesForFrequency(frequency: LobAutoSendFrequency): number {
+  return frequency === "weekly" ? WEEKLY_AUTO_SEND_INTERVAL_MINUTES : DAILY_AUTO_SEND_INTERVAL_MINUTES;
+}
+
+export function calendarDateInTimeZone(date: Date, timeZone = AUTO_SEND_TIMEZONE): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/** JS weekday (0 = Sunday) in the given IANA timezone. */
+export function weekdayInTimeZone(date: Date, timeZone = AUTO_SEND_TIMEZONE): number {
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+  }).format(date);
+  const map: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  return map[day] ?? date.getUTCDay();
+}
+
+export function parseAutoSendFrequency(raw: unknown): LobAutoSendFrequency {
+  if (raw === "daily") return "daily";
+  return "weekly";
+}
 
 export type LobMailType = "usps_first_class" | "usps_standard";
 
@@ -40,7 +93,9 @@ export type LobFulfillmentSettings = {
   lobEnvironment: "test" | "live";
   productType: LobProductType;
   autoSendMode: LobAutoSendMode;
-  /** Only used when autoSendMode is scheduled_batch — min minutes between auto-send runs. */
+  /** Daily at 9am MT, or weekly on Monday at 9am MT. */
+  autoSendFrequency: LobAutoSendFrequency;
+  /** Derived from autoSendFrequency; kept for Firestore backward compatibility. */
   batchIntervalMinutes: number;
   /** Min awaiting-print postcards per recipient before auto-send includes them (manual submit ignores this). */
   batchMinQueuedCards: number;
@@ -74,7 +129,8 @@ export const DEFAULT_LOB_FULFILLMENT_SETTINGS: LobFulfillmentSettings = {
   lobEnvironment: "test",
   productType: "letter_us",
   autoSendMode: "disabled",
-  batchIntervalMinutes: DAILY_AUTO_SEND_INTERVAL_MINUTES,
+  autoSendFrequency: "weekly",
+  batchIntervalMinutes: WEEKLY_AUTO_SEND_INTERVAL_MINUTES,
   /** One full US letter: 2 postcards on cover + 3×4 inside (see build-lob-letter-html). */
   batchMinQueuedCards: 14,
   batchMinRecipients: 0,
@@ -165,7 +221,7 @@ export function parseLobFulfillmentSettings(
   const addressPlacement: LobAddressPlacement =
     placement === "insert_blank_page" ? "insert_blank_page" : "top_first_page";
 
-  const interval = Number(raw.batchIntervalMinutes);
+  const autoSendFrequency = parseAutoSendFrequency(raw.autoSendFrequency);
   const minCards = Number(raw.batchMinQueuedCards);
   const maxRecipients = Number(raw.batchMaxRecipientsPerRun);
   const concurrency = Number(raw.submitConcurrency);
@@ -175,8 +231,8 @@ export function parseLobFulfillmentSettings(
     lobEnvironment,
     productType,
     autoSendMode,
-    batchIntervalMinutes:
-      Number.isFinite(interval) && interval >= 5 ? Math.floor(interval) : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchIntervalMinutes,
+    autoSendFrequency,
+    batchIntervalMinutes: intervalMinutesForFrequency(autoSendFrequency),
     batchMinQueuedCards:
       Number.isFinite(minCards) && minCards >= 1 ? Math.floor(minCards) : DEFAULT_LOB_FULFILLMENT_SETTINGS.batchMinQueuedCards,
     batchMinRecipients: 0,
@@ -198,6 +254,9 @@ export function parseLobFulfillmentSettings(
 }
 
 export function validateLobFulfillmentSettings(settings: LobFulfillmentSettings): string | null {
+  if (settings.autoSendFrequency !== "daily" && settings.autoSendFrequency !== "weekly") {
+    return "autoSendFrequency must be daily or weekly";
+  }
   if (settings.batchIntervalMinutes < 5) return "batchIntervalMinutes must be >= 5";
   if (settings.batchMinQueuedCards < 1) return "batchMinQueuedCards must be >= 1";
   if (settings.batchMinRecipients < 0) return "batchMinRecipients must be >= 0";
