@@ -23,6 +23,7 @@ export async function GET(req: Request) {
         batchMinQueuedCards: settings.batchMinQueuedCards,
         batchMaxRecipientsPerRun: settings.batchMaxRecipientsPerRun,
         batchIntervalMinutes: settings.batchIntervalMinutes,
+        autoSendFrequency: settings.autoSendFrequency,
         submitConcurrency: settings.submitConcurrency,
       },
       processor,

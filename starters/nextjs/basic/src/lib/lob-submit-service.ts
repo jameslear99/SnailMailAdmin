@@ -16,7 +16,10 @@ import { createLobLetter, formatLobSubmitErrorMessage, lobConfigured, type LobAp
 import { lobSecretMisconfigurationReason } from "@/lib/lob-credentials";
 import { resolveLobLetterFile } from "@/lib/upload-lob-letter-html";
 import {
+  calendarDateInTimeZone,
   lobLetterSizeForProduct,
+  weekdayInTimeZone,
+  WEEKLY_AUTO_SEND_WEEKDAY,
   type LobFulfillmentSettings,
 } from "@/lib/lob-fulfillment-settings";
 import {
@@ -941,10 +944,33 @@ export function shouldRunAutoSend(
   lastAutoRunAt: Date | null,
   now: Date = new Date(),
 ): boolean {
-  if (!settings.lobEnabled || settings.autoSendMode === "disabled") return false;
-  if (!lastAutoRunAt) return true;
-  const elapsedMs = now.getTime() - lastAutoRunAt.getTime();
-  return elapsedMs >= settings.batchIntervalMinutes * 60_000;
+  return autoSendWaitReason(settings, lastAutoRunAt, now) === null;
+}
+
+/** Why scheduled auto-send will not run now, or null if it should. */
+export function autoSendWaitReason(
+  settings: LobFulfillmentSettings,
+  lastAutoRunAt: Date | null,
+  now: Date = new Date(),
+): string | null {
+  if (!settings.lobEnabled) return "Lob fulfillment disabled";
+  if (settings.autoSendMode === "disabled") return "Auto send disabled";
+
+  if (settings.autoSendFrequency !== "daily" && weekdayInTimeZone(now) !== WEEKLY_AUTO_SEND_WEEKDAY) {
+    return "Weekly schedule — next auto run is Monday 9:00 AM Mountain Time";
+  }
+
+  if (lastAutoRunAt) {
+    const alreadyRanToday =
+      calendarDateInTimeZone(lastAutoRunAt) === calendarDateInTimeZone(now);
+    if (alreadyRanToday) {
+      return settings.autoSendFrequency === "daily"
+        ? "Already ran today — next auto run is 9:00 AM Mountain Time"
+        : "Already ran today — next auto run is next Monday 9:00 AM Mountain Time";
+    }
+  }
+
+  return null;
 }
 
 /** @deprecated Use shouldRunAutoSend */
