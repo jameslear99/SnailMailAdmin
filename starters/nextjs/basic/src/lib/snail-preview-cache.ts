@@ -108,6 +108,56 @@ export async function readCachedSnailPreviewPng(
   return buf;
 }
 
+function sizeFromPreviewObjectName(objectName: string): SnailPreviewSize | null {
+  const base = objectName.split("/").pop() ?? "";
+  if (base.startsWith("hero-")) return "hero";
+  if (base.startsWith("badge-")) return "badge";
+  return null;
+}
+
+/**
+ * Last-resort cache: any composited PNG for this user that is large enough
+ * for the requested display slot. Badge slots may use a hero PNG (displayed
+ * at 56px). Cover/hero must not use a small badge.
+ */
+export async function readBestCachedSnailPreviewPng(
+  uid: string,
+  preferredSize: SnailPreviewSize,
+): Promise<Buffer | null> {
+  const trimmed = uid.trim();
+  if (!trimmed) return null;
+
+  const bucket = getAdminBucket();
+  const [files] = await bucket.getFiles({
+    prefix: `snail-previews/${trimmed}/`,
+    maxResults: 20,
+  });
+  if (files.length === 0) return null;
+
+  const ranked: { score: number; buf: Buffer }[] = [];
+  for (const file of files) {
+    const fileSize = sizeFromPreviewObjectName(file.name);
+    if (!fileSize) continue;
+    if (preferredSize === "hero" && fileSize !== "hero") continue;
+
+    try {
+      const [buf] = await file.download();
+      const minSize: SnailPreviewSize = preferredSize === "hero" ? "hero" : "badge";
+      if (!cachedSnailPreviewMeetsSize(buf, minSize)) continue;
+
+      const dims = pngPixelSize(buf);
+      const area = (dims?.width ?? 0) * (dims?.height ?? 0);
+      const preferredBonus = fileSize === preferredSize ? 1_000_000_000 : 0;
+      ranked.push({ score: preferredBonus + area, buf });
+    } catch {
+      // Skip unreadable objects and keep looking.
+    }
+  }
+
+  ranked.sort((a, b) => b.score - a.score);
+  return ranked[0]?.buf ?? null;
+}
+
 export function pngBufferToDataUrl(png: Buffer): string {
   return `data:image/png;base64,${png.toString("base64")}`;
 }

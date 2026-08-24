@@ -16,7 +16,11 @@ import {
   type ParsedSnailLook,
 } from "@/lib/parse-snail-look";
 import { parseSnailArtRecolorPolicy } from "@/lib/snail-art-recolor-policy";
-import { compareSnailArtPaintOrder } from "@/lib/snail-art-types";
+import {
+  compareSnailArtPaintOrder,
+  SNAIL_ART_CATEGORIES,
+  type SnailArtCategory,
+} from "@/lib/snail-art-types";
 import {
   layerAcceptsPreviewTint,
   tintForLayerFromColors,
@@ -77,6 +81,101 @@ async function layerPngBuffer(
 async function loadRecolorPolicy(db: Firestore) {
   const snap = await db.collection("adminSettings").doc("snailArtRecolorPolicy").get();
   return parseSnailArtRecolorPolicy(serializeDoc(snap.data() ?? undefined) ?? undefined);
+}
+
+type CatalogAsset = {
+  id: string;
+  category: SnailArtCategory;
+  storagePath: string;
+};
+
+function hashSeed(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function pickCatalogId(assets: CatalogAsset[], seed: string): string | undefined {
+  if (assets.length === 0) return undefined;
+  return assets[hashSeed(seed) % assets.length]!.id;
+}
+
+function snailIdFromProfile(profile: Record<string, unknown> | null, uid: string): string {
+  const snail = profile?.snail;
+  if (snail && typeof snail === "object" && !Array.isArray(snail)) {
+    const id = (snail as Record<string, unknown>).id;
+    if (typeof id === "string" && id.trim()) return id.trim();
+  }
+  return uid;
+}
+
+async function loadPublishedCatalogAssets(db: Firestore): Promise<Map<SnailArtCategory, CatalogAsset[]>> {
+  const snap = await db.collection("snailArtAssets").limit(500).get();
+  const byCategory = new Map<SnailArtCategory, CatalogAsset[]>();
+  for (const cat of SNAIL_ART_CATEGORIES) byCategory.set(cat, []);
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+    const category = data.category as string | undefined;
+    const storagePath = typeof data.storagePath === "string" ? data.storagePath.trim() : "";
+    const status = data.status as string | undefined;
+    if (!category || !SNAIL_ART_CATEGORIES.includes(category as SnailArtCategory)) continue;
+    if (!storagePath) continue;
+    if (status && status !== "published") continue;
+    byCategory.get(category as SnailArtCategory)!.push({
+      id: doc.id,
+      category: category as SnailArtCategory,
+      storagePath,
+    });
+  }
+  return byCategory;
+}
+
+/**
+ * Fill missing catalog IDs the same way the Flutter app does at display time
+ * (`SnailArtCatalog.resolveLook`) so Lob can still composite a real snail.
+ */
+async function completeLookFromCatalog(
+  db: Firestore,
+  look: ParsedSnailLook | null,
+  seed: string,
+): Promise<ParsedSnailLook | null> {
+  const required: SnailArtCategory[] = ["antenna", "body", "shell", "face"];
+  const missing = !look || required.some((cat) => {
+    const id =
+      cat === "antenna" ? look.antennaAssetId :
+      cat === "body" ? look.bodyAssetId :
+      cat === "shell" ? look.shellAssetId :
+      look.faceAssetId;
+    return !id;
+  });
+  if (look && !missing) return look;
+
+  const byCategory = await loadPublishedCatalogAssets(db);
+  const pick = (cat: SnailArtCategory, current?: string): string => {
+    if (current) return current;
+    return pickCatalogId(byCategory.get(cat) ?? [], `${seed}:${cat}`) ?? "";
+  };
+
+  const antennaAssetId = pick("antenna", look?.antennaAssetId);
+  const bodyAssetId = pick("body", look?.bodyAssetId);
+  const shellAssetId = pick("shell", look?.shellAssetId);
+  const faceAssetId = pick("face", look?.faceAssetId);
+  if (!antennaAssetId || !bodyAssetId || !shellAssetId || !faceAssetId) return look;
+
+  return {
+    antennaAssetId,
+    bodyAssetId,
+    shellAssetId,
+    faceAssetId,
+    accessoryAssetId: look?.accessoryAssetId,
+    antennaColor: look?.antennaColor ?? "#6e8b5e",
+    bodyColor: look?.bodyColor ?? "#6e8b5e",
+    shellColor: look?.shellColor ?? "#8b9e7a",
+  };
 }
 
 async function loadProfileForUid(
@@ -146,24 +245,26 @@ async function compositeSnailPng(
         category: data.category as string | undefined,
         recolorable: data.recolorable as boolean | undefined,
         stackOrder: data.stackOrder as number | undefined,
-        storagePath: data.storagePath as string,
+        storagePath: typeof data.storagePath === "string" ? data.storagePath.trim() : "",
         fileFormat: (data.fileFormat as string | undefined) ?? "png",
       };
     })
+    .filter((layer) => layer.storagePath.length > 0)
     .sort(compareSnailArtPaintOrder);
 
   if (layers.length === 0) {
     throw new Error("No snail art layers found");
   }
 
-  const composites: { input: Buffer; top: number; left: number }[] = [];
-  for (const layer of layers) {
-    const tint = layerAcceptsPreviewTint(layer, policy)
-      ? tintForLayerFromColors(layer, colors, policy)
-      : null;
-    const input = await layerPngBuffer(layer.storagePath, layer.fileFormat, px, tint);
-    composites.push({ input, top: 0, left: 0 });
-  }
+  const composites = await Promise.all(
+    layers.map(async (layer) => {
+      const tint = layerAcceptsPreviewTint(layer, policy)
+        ? tintForLayerFromColors(layer, colors, policy)
+        : null;
+      const input = await layerPngBuffer(layer.storagePath, layer.fileFormat, px, tint);
+      return { input, top: 0, left: 0 };
+    }),
+  );
 
   return sharp({
     create: {
@@ -192,7 +293,8 @@ export async function resolveSnailPreviewPng(
   if (!trimmed) return null;
 
   const profile = await loadProfileForUid(db, trimmed);
-  const look = parseSnailLookFromProfile(profile);
+  let look = parseSnailLookFromProfile(profile);
+  look = await completeLookFromCatalog(db, look, snailIdFromProfile(profile, trimmed));
   if (!look) return null;
 
   const fingerprint = snailLookFingerprint(look);
@@ -201,23 +303,32 @@ export async function resolveSnailPreviewPng(
   const file = bucket.file(objectPath);
   const [exists] = await file.exists();
   if (exists) {
-    const [buf] = await file.download();
-    if (cachedSnailPreviewMeetsSize(buf, size)) return buf;
+    try {
+      const [buf] = await file.download();
+      if (cachedSnailPreviewMeetsSize(buf, size)) return buf;
+    } catch (e) {
+      console.error(`[lob-snail] cache download failed for ${trimmed} (${size})`, e);
+    }
   }
 
   const png = await compositeSnailPng(db, look, size);
-  const downloadToken = newFirebaseStorageDownloadToken();
-  await file.save(png, {
-    metadata: {
-      contentType: "image/png",
-      cacheControl: "public, max-age=31536000, immutable",
+  try {
+    const downloadToken = newFirebaseStorageDownloadToken();
+    await file.save(png, {
       metadata: {
-        firebaseStorageDownloadTokens: downloadToken,
-        uid: trimmed,
-        size,
+        contentType: "image/png",
+        cacheControl: "public, max-age=31536000, immutable",
+        metadata: {
+          firebaseStorageDownloadTokens: downloadToken,
+          uid: trimmed,
+          size,
+        },
       },
-    },
-  });
+    });
+  } catch (e) {
+    // Still return the composite — a cache write must not drop the snail from the letter.
+    console.error(`[lob-snail] cache save failed for ${trimmed} (${size})`, e);
+  }
 
   return png;
 }

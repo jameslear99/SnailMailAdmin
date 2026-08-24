@@ -4,34 +4,25 @@ import type { Firestore } from "firebase-admin/firestore";
 
 import { loadProfileForSnailPreview } from "@/lib/load-snail-profile-for-preview";
 import { parseSnailLookFromProfile, snailLookFingerprint } from "@/lib/parse-snail-look";
+import { resolveSnailPreviewPng } from "@/lib/render-snail-preview-server";
 import {
   cachedSnailPreviewMeetsSize,
   findCachedSnailPreviewUrlForLook,
   pngBufferToDataUrl,
+  readBestCachedSnailPreviewPng,
   readCachedSnailPreviewPngForLook,
   type SnailPreviewSize,
 } from "@/lib/snail-preview-cache";
 
-type SnailPreviewModule = typeof import("@/lib/render-snail-preview-server");
-
-let cachedPreviewModule: SnailPreviewModule | null | undefined;
-
-async function loadSnailPreviewModule(): Promise<SnailPreviewModule | null> {
-  if (cachedPreviewModule !== undefined) return cachedPreviewModule;
-  try {
-    cachedPreviewModule = await import("@/lib/render-snail-preview-server");
-    return cachedPreviewModule;
-  } catch (e) {
-    console.error("[lob-snail] failed to load snail preview render module", e);
-    cachedPreviewModule = null;
-    return null;
-  }
-}
-
 function sizesToTry(preferred: SnailPreviewSize): SnailPreviewSize[] {
   // Cover snail displays large — never substitute a 256px badge (looks blurry in PDF).
+  // Sender badges are shown at 56px, so a hero PNG is an acceptable fallback.
   if (preferred === "hero") return ["hero"];
-  return [preferred];
+  return ["badge", "hero"];
+}
+
+function pngUsableFor(preferred: SnailPreviewSize, png: Buffer): boolean {
+  return cachedSnailPreviewMeetsSize(png, preferred === "hero" ? "hero" : "badge");
 }
 
 /**
@@ -46,43 +37,50 @@ export async function resolveSnailImageForLob(
   const trimmed = uid.trim();
   if (!trimmed) return null;
 
+  const sizes = sizesToTry(preferredSize);
+
+  for (const size of sizes) {
+    try {
+      const png = await resolveSnailPreviewPng(db, trimmed, size);
+      if (png?.length && pngUsableFor(preferredSize, png)) {
+        return pngBufferToDataUrl(png);
+      }
+    } catch (e) {
+      console.error(`[lob-snail] preview render failed for ${trimmed} (${size})`, e);
+    }
+  }
+
   const profile = await loadProfileForSnailPreview(db, trimmed);
   const look = parseSnailLookFromProfile(profile);
-  if (!look) return null;
+  const fingerprint = look ? snailLookFingerprint(look) : "";
 
-  const fingerprint = snailLookFingerprint(look);
-  const sizes = sizesToTry(preferredSize);
-  const preview = await loadSnailPreviewModule();
-
-  if (preview) {
+  if (fingerprint) {
     for (const size of sizes) {
       try {
-        const png = await preview.resolveSnailPreviewPng(db, trimmed, size);
-        if (png?.length && cachedSnailPreviewMeetsSize(png, size)) {
-          return pngBufferToDataUrl(png);
+        const cachedPng = await readCachedSnailPreviewPngForLook(trimmed, size, fingerprint);
+        if (cachedPng?.length && pngUsableFor(preferredSize, cachedPng)) {
+          return pngBufferToDataUrl(cachedPng);
         }
       } catch (e) {
-        console.error(`[lob-snail] preview render failed for ${trimmed} (${size})`, e);
+        console.error(`[lob-snail] cached PNG read failed for ${trimmed} (${size})`, e);
+      }
+
+      try {
+        const cachedUrl = await findCachedSnailPreviewUrlForLook(trimmed, size, fingerprint);
+        if (cachedUrl) return cachedUrl;
+      } catch (e) {
+        console.error(`[lob-snail] cached URL lookup failed for ${trimmed} (${size})`, e);
       }
     }
   }
 
-  for (const size of sizes) {
-    try {
-      const cachedPng = await readCachedSnailPreviewPngForLook(trimmed, size, fingerprint);
-      if (cachedPng?.length && cachedSnailPreviewMeetsSize(cachedPng, size)) {
-        return pngBufferToDataUrl(cachedPng);
-      }
-    } catch (e) {
-      console.error(`[lob-snail] cached PNG read failed for ${trimmed} (${size})`, e);
+  try {
+    const anyCached = await readBestCachedSnailPreviewPng(trimmed, preferredSize);
+    if (anyCached?.length && pngUsableFor(preferredSize, anyCached)) {
+      return pngBufferToDataUrl(anyCached);
     }
-
-    try {
-      const cachedUrl = await findCachedSnailPreviewUrlForLook(trimmed, size, fingerprint);
-      if (cachedUrl) return cachedUrl;
-    } catch (e) {
-      console.error(`[lob-snail] cached URL lookup failed for ${trimmed} (${size})`, e);
-    }
+  } catch (e) {
+    console.error(`[lob-snail] any-cache PNG read failed for ${trimmed}`, e);
   }
 
   return null;

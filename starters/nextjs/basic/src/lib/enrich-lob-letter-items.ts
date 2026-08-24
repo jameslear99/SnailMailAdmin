@@ -59,17 +59,23 @@ export async function enrichItemsForLobLetter(
   const usernameByUid = new Map<string, string>();
   const snailBadgeByUid = new Map<string, string>();
 
-  for (const uid of senderUids) {
-    const [username, snailUrl] = await Promise.all([
-      loadUsername(db, uid),
-      resolveSnailImageForLob(db, uid, "badge"),
-    ]);
-    if (username) usernameByUid.set(uid, username);
-    if (snailUrl) snailBadgeByUid.set(uid, snailUrl);
-  }
+  await Promise.all(
+    [...senderUids].map(async (uid) => {
+      const [username, snailUrl] = await Promise.all([
+        loadUsername(db, uid),
+        resolveSnailImageForLob(db, uid, "badge"),
+      ]);
+      if (username) usernameByUid.set(uid, username);
+      if (snailUrl) snailBadgeByUid.set(uid, snailUrl);
+      else console.error(`[lob-snail] no sender badge resolved for ${uid}`);
+    }),
+  );
 
   const recipientSnailImageUrl =
     (await resolveSnailImageForLob(db, recipientUid.trim(), "hero")) ?? undefined;
+  if (recipientUid.trim() && !recipientSnailImageUrl) {
+    console.error(`[lob-snail] no recipient hero resolved for ${recipientUid.trim()}`);
+  }
 
   const enriched: EnrichedPrintQueueItem[] = items.map((item) => {
     const senderUid = senderUidFromItem(item);
