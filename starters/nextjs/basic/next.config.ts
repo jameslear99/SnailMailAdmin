@@ -9,6 +9,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: appRoot,
   serverExternalPackages: ["sharp"],
+  // Native + wasm sharp binaries must ship with standalone App Hosting output.
+  outputFileTracingIncludes: {
+    "/api/**": ["./node_modules/sharp/**/*", "./node_modules/@img/**/*"],
+  },
   turbopack: {
     root: appRoot,
   },
