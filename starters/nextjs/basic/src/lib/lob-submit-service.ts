@@ -17,8 +17,10 @@ import { lobSecretMisconfigurationReason } from "@/lib/lob-credentials";
 import { resolveLobLetterFile } from "@/lib/upload-lob-letter-html";
 import {
   calendarDateInTimeZone,
+  dayOfMonthInTimeZone,
   lobLetterSizeForProduct,
   weekdayInTimeZone,
+  MONTHLY_AUTO_SEND_DAY,
   WEEKLY_AUTO_SEND_WEEKDAY,
   type LobFulfillmentSettings,
 } from "@/lib/lob-fulfillment-settings";
@@ -956,17 +958,24 @@ export function autoSendWaitReason(
   if (!settings.lobEnabled) return "Lob fulfillment disabled";
   if (settings.autoSendMode === "disabled") return "Auto send disabled";
 
-  if (settings.autoSendFrequency !== "daily" && weekdayInTimeZone(now) !== WEEKLY_AUTO_SEND_WEEKDAY) {
+  if (settings.autoSendFrequency === "weekly" && weekdayInTimeZone(now) !== WEEKLY_AUTO_SEND_WEEKDAY) {
     return "Weekly schedule — next auto run is Monday 9:00 AM Mountain Time";
+  }
+  if (settings.autoSendFrequency === "monthly" && dayOfMonthInTimeZone(now) !== MONTHLY_AUTO_SEND_DAY) {
+    return "Monthly schedule — next auto run is the 1st at 9:00 AM Mountain Time";
   }
 
   if (lastAutoRunAt) {
     const alreadyRanToday =
       calendarDateInTimeZone(lastAutoRunAt) === calendarDateInTimeZone(now);
     if (alreadyRanToday) {
-      return settings.autoSendFrequency === "daily"
-        ? "Already ran today — next auto run is 9:00 AM Mountain Time"
-        : "Already ran today — next auto run is next Monday 9:00 AM Mountain Time";
+      if (settings.autoSendFrequency === "daily") {
+        return "Already ran today — next auto run is 9:00 AM Mountain Time";
+      }
+      if (settings.autoSendFrequency === "monthly") {
+        return "Already ran today — next auto run is the 1st of next month at 9:00 AM Mountain Time";
+      }
+      return "Already ran today — next auto run is next Monday 9:00 AM Mountain Time";
     }
   }
 

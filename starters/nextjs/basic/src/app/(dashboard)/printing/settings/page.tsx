@@ -9,6 +9,7 @@ import {
   DEFAULT_LOB_FULFILLMENT_SETTINGS,
   DEFAULT_LOB_THANK_YOU_MESSAGE,
   AUTO_SEND_FREQUENCY_LABELS,
+  AUTO_SEND_FREQUENCY_TITLES,
   intervalMinutesForFrequency,
   LOB_PRODUCT_LABELS,
   missingReturnAddressFields,
@@ -347,15 +348,16 @@ export default function LobSettingsPage() {
                           {(Object.keys(AUTO_SEND_FREQUENCY_LABELS) as LobAutoSendFrequency[]).map(
                             (key) => (
                               <option key={key} value={key}>
-                                {key === "daily" ? "Daily" : "Weekly"} — {AUTO_SEND_FREQUENCY_LABELS[key]}
+                                {AUTO_SEND_FREQUENCY_TITLES[key]} — {AUTO_SEND_FREQUENCY_LABELS[key]}
                               </option>
                             ),
                           )}
                         </select>
                         <span className="mt-1 block text-xs text-[#5C564D]">
-                          Weekly (Monday) keeps postage down — recipients get at most one letter per
-                          week. The Cloud Function still wakes daily at 9:00 AM Mountain Time; weekly
-                          mode skips every day except Monday.
+                          Weekly (Monday) or monthly (1st) keeps postage down — recipients get at most
+                          one letter on that cadence. The Cloud Function still wakes daily at 9:00 AM
+                          Mountain Time; weekly skips every day except Monday, and monthly skips every
+                          day except the 1st.
                         </span>
                       </label>
 
@@ -445,9 +447,9 @@ export default function LobSettingsPage() {
 
             <p className="mt-4 text-xs text-[#5C564D]">
               Automatic runs are triggered by the <strong>processLobAutoPrint</strong> Cloud Function
-              (daily at 9:00 AM Mountain Time). Weekly frequency is enforced here, so you can switch
-              Daily/Weekly without redeploying functions. Set the same <code>LOB_AUTO_CRON_SECRET</code>{" "}
-              in App Hosting and Cloud Functions secrets.
+              (daily at 9:00 AM Mountain Time). Frequency is enforced here, so you can switch
+              Daily/Weekly/Monthly without redeploying functions. Set the same{" "}
+              <code>LOB_AUTO_CRON_SECRET</code> in App Hosting and Cloud Functions secrets.
             </p>
 
             <button

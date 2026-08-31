@@ -18,7 +18,7 @@ export type LobProductType = "letter_us" | "letter_us_legal" | "postcard_4x6";
 export type LobAutoSendMode = "disabled" | "immediate" | "scheduled_batch";
 
 /** How often scheduled auto-send actually submits mail. */
-export type LobAutoSendFrequency = "daily" | "weekly";
+export type LobAutoSendFrequency = "daily" | "weekly" | "monthly";
 
 /** Cloud Function timezone — auto-send checks weekday/date in this zone. */
 export const AUTO_SEND_TIMEZONE = "America/Denver";
@@ -26,19 +26,34 @@ export const AUTO_SEND_TIMEZONE = "America/Denver";
 /** JS weekday: 0 = Sunday, 1 = Monday. Weekly mode only submits on this day. */
 export const WEEKLY_AUTO_SEND_WEEKDAY = 1;
 
+/** Calendar day of month. Monthly mode only submits on this day. */
+export const MONTHLY_AUTO_SEND_DAY = 1;
+
 /** Default interval between automatic Lob send runs (24 hours). */
 export const DAILY_AUTO_SEND_INTERVAL_MINUTES = 24 * 60;
 
 /** Interval stored for weekly auto-send (7 days). */
 export const WEEKLY_AUTO_SEND_INTERVAL_MINUTES = 7 * 24 * 60;
 
+/** Interval stored for monthly auto-send (30 days, Firestore backward compat). */
+export const MONTHLY_AUTO_SEND_INTERVAL_MINUTES = 30 * 24 * 60;
+
+export const AUTO_SEND_FREQUENCY_TITLES: Record<LobAutoSendFrequency, string> = {
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+};
+
 export const AUTO_SEND_FREQUENCY_LABELS: Record<LobAutoSendFrequency, string> = {
   daily: "Every day at 9:00 AM Mountain Time",
   weekly: "Every Monday at 9:00 AM Mountain Time",
+  monthly: "The 1st of every month at 9:00 AM Mountain Time",
 };
 
 export function intervalMinutesForFrequency(frequency: LobAutoSendFrequency): number {
-  return frequency === "weekly" ? WEEKLY_AUTO_SEND_INTERVAL_MINUTES : DAILY_AUTO_SEND_INTERVAL_MINUTES;
+  if (frequency === "monthly") return MONTHLY_AUTO_SEND_INTERVAL_MINUTES;
+  if (frequency === "weekly") return WEEKLY_AUTO_SEND_INTERVAL_MINUTES;
+  return DAILY_AUTO_SEND_INTERVAL_MINUTES;
 }
 
 export function calendarDateInTimeZone(date: Date, timeZone = AUTO_SEND_TIMEZONE): string {
@@ -68,8 +83,18 @@ export function weekdayInTimeZone(date: Date, timeZone = AUTO_SEND_TIMEZONE): nu
   return map[day] ?? date.getUTCDay();
 }
 
+/** Calendar day of month (1–31) in the given IANA timezone. */
+export function dayOfMonthInTimeZone(date: Date, timeZone = AUTO_SEND_TIMEZONE): number {
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    day: "numeric",
+  }).format(date);
+  const parsed = parseInt(day, 10);
+  return Number.isFinite(parsed) ? parsed : date.getUTCDate();
+}
+
 export function parseAutoSendFrequency(raw: unknown): LobAutoSendFrequency {
-  if (raw === "daily") return "daily";
+  if (raw === "daily" || raw === "monthly") return raw;
   return "weekly";
 }
 
@@ -93,7 +118,7 @@ export type LobFulfillmentSettings = {
   lobEnvironment: "test" | "live";
   productType: LobProductType;
   autoSendMode: LobAutoSendMode;
-  /** Daily at 9am MT, or weekly on Monday at 9am MT. */
+  /** Daily at 9am MT, weekly on Monday at 9am MT, or monthly on the 1st at 9am MT. */
   autoSendFrequency: LobAutoSendFrequency;
   /** Derived from autoSendFrequency; kept for Firestore backward compatibility. */
   batchIntervalMinutes: number;
@@ -254,8 +279,12 @@ export function parseLobFulfillmentSettings(
 }
 
 export function validateLobFulfillmentSettings(settings: LobFulfillmentSettings): string | null {
-  if (settings.autoSendFrequency !== "daily" && settings.autoSendFrequency !== "weekly") {
-    return "autoSendFrequency must be daily or weekly";
+  if (
+    settings.autoSendFrequency !== "daily" &&
+    settings.autoSendFrequency !== "weekly" &&
+    settings.autoSendFrequency !== "monthly"
+  ) {
+    return "autoSendFrequency must be daily, weekly, or monthly";
   }
   if (settings.batchIntervalMinutes < 5) return "batchIntervalMinutes must be >= 5";
   if (settings.batchMinQueuedCards < 1) return "batchMinQueuedCards must be >= 1";
